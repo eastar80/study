@@ -124,17 +124,29 @@ async function loadWeather() {
 async function fetchKospiData() {
   const target = "https://query1.finance.yahoo.com/v8/finance/chart/%5EKS11?interval=1d&range=1d";
 
-  try {
-    const res = await fetch(target);
-    if (!res.ok) throw new Error("direct fetch failed");
-    return await res.json();
-  } catch {
-    // Fallback via public CORS proxy in case the browser blocks the direct request.
-    const proxied = `https://api.allorigins.win/raw?url=${encodeURIComponent(target)}`;
-    const res = await fetch(proxied);
-    if (!res.ok) throw new Error("proxied fetch failed");
-    return await res.json();
+  // Yahoo's endpoint doesn't send CORS headers to browsers, so a direct fetch
+  // usually fails there. Try it first (works in some environments), then fall
+  // back through a few public CORS proxies.
+  const attempts = [
+    () => fetch(target),
+    () => fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(target)}`),
+    () => fetch(`https://corsproxy.io/?url=${encodeURIComponent(target)}`),
+    () => fetch(`https://thingproxy.freeboard.io/fetch/${target}`),
+  ];
+
+  const errors = [];
+  for (const attempt of attempts) {
+    try {
+      const res = await attempt();
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (data?.chart?.result?.[0]?.meta) return data;
+      throw new Error("예상치 못한 응답 형식");
+    } catch (err) {
+      errors.push(err.message);
+    }
   }
+  throw new Error(errors[errors.length - 1] || "모든 요청 실패");
 }
 
 async function loadStock() {
@@ -164,7 +176,10 @@ async function loadStock() {
       <div class="stock-updated">업데이트: ${updated}</div>
     `;
   } catch (err) {
-    body.innerHTML = `<p class="status error">지수 정보를 불러오지 못했습니다. (${err.message})</p>`;
+    body.innerHTML = `
+      <p class="status error">지수 정보를 불러오지 못했습니다. (${err.message})</p>
+      <p class="status"><a href="https://finance.naver.com/sise/sise_index.naver?code=KOSPI" target="_blank" rel="noopener">네이버 증권에서 확인하기 →</a></p>
+    `;
   }
 }
 
