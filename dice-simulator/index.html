@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#f5a623" />
+  <title>행운의 주사위</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script src="script.js" defer></script>
+</head>
+<body>
+  <main class="game-card" aria-labelledby="game-title">
+    <div class="eyebrow"><span aria-hidden="true">✦</span> DICE ROLLER</div>
+    <h1 id="game-title">행운의 주사위</h1>
+    <p class="subtitle">진짜 주사위처럼 굴려 오늘의 행운을 확인하세요!</p>
+
+    <section class="dice-tray" aria-label="주사위 결과">
+      <div class="dice-stage">
+        <div class="scene">
+          <div class="cube cube-one" id="die-one" role="img" aria-label="첫 번째 주사위 윗면: 3"></div>
+        </div>
+        <span class="die-label">DIE 01</span>
+      </div>
+      <div class="plus" aria-hidden="true">+</div>
+      <div class="dice-stage">
+        <div class="scene">
+          <div class="cube cube-two" id="die-two" role="img" aria-label="두 번째 주사위 윗면: 4"></div>
+        </div>
+        <span class="die-label">DIE 02</span>
+      </div>
+    </section>
+
+    <div class="result" id="result" aria-live="polite">
+      <span class="result-label">윗면의 합</span>
+      <strong id="total">7</strong>
+    </div>
+    <button class="roll-button" id="roll-button" type="button" data-testid="roll-button">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v6h-6" /></svg>
+      <span>주사위 굴리기</span>
+    </button>
+    <p class="hint">스페이스바를 눌러도 굴릴 수 있어요</p>
+  </main>
+  <div class="grain" aria-hidden="true"></div>
+</body>
+</html>
