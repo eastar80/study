@@ -13,8 +13,8 @@ const pipPositions = {
   5: [1, 3, 5, 7, 9], 6: [1, 3, 4, 6, 7, 9]
 };
 const orientations = {
-  1: 'rotateX(-90deg)', 2: 'rotateZ(90deg)', 3: 'rotateX(0deg)',
-  4: 'rotateX(180deg)', 5: 'rotateZ(-90deg)', 6: 'rotateX(90deg)'
+  1: 'rotateX(90deg)', 2: 'rotateZ(-90deg)', 3: 'rotateX(0deg)',
+  4: 'rotateX(180deg)', 5: 'rotateZ(90deg)', 6: 'rotateX(-90deg)'
 };
 
 function buildCube(cube) {
