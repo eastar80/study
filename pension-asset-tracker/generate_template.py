@@ -67,14 +67,17 @@ ws0["B3"].font = Font(italic=True, color="666666")
 guide = [
     ("① 계좌설정", "4개 계좌(IRP/연금저축)와 각 계좌가 보유할 ETF 목록·목표비중(%)을 등록합니다. "
                  "계좌당 목표비중 합계는 100%가 되어야 합니다. (예시 데이터가 들어있으니 실제 보유 종목으로 교체하세요)"),
-    ("② 현황_리밸런싱", "분기마다 계좌설정과 '동일한 순서'로 보유수량·현재가만 입력하면, 평가금액/현재비중/목표비중과의 "
-                    "괴리, 계좌별 매수·매도 필요 수량이 자동 계산됩니다. 이 결과를 보고 실제 주문을 넣으면 됩니다."),
-    ("③ 리밸런싱_히스토리", "실제로 체결한 매수/매도 내역을 한 줄씩 기록하는 로그입니다. 계좌별칭·ETF명은 계좌설정을 "
-                        "참조해 자동으로 채워집니다. 과거에 무엇을 언제 왜 했는지 전부 남습니다."),
-    ("④ 시계열_스냅샷", "분기가 끝날 때마다(리밸런싱 직후) 계좌별 평가금액 합계를 한 줄 추가하세요. "
+    ("② ETF전체목록", "상장된 모든 ETF의 티커·이름을 모아둔 참고용 시트입니다. 새 종목을 계좌설정에 추가할 때 "
+                   "여기서 이름으로 검색해 티커를 복사해 쓰면 됩니다. scripts/refresh_etf_list.py 실행 시 최신 목록으로 갱신됩니다."),
+    ("③ 현황_리밸런싱", "분기마다 계좌설정과 '동일한 순서'로 보유수량·현재가만 입력하면, 평가금액/현재비중/목표비중과의 "
+                    "괴리, 계좌별 매수·매도 필요 수량이 자동 계산됩니다. 현재가는 scripts/fetch_prices.py 로 자동 입력할 수 있습니다."),
+    ("④ 리밸런싱_히스토리", "실제로 체결한 매수/매도 내역을 한 줄씩 기록하는 로그입니다. 계좌별칭·ETF명은 계좌설정을 "
+                        "참조해 자동으로 채워집니다. scripts/log_rebalance.py 를 실행하면 현황_리밸런싱의 매수/매도 대상이 "
+                        "오늘 날짜로 자동 초안 작성되어, 체결가만 확인/수정하면 됩니다."),
+    ("⑤ 시계열_스냅샷", "분기가 끝날 때마다(리밸런싱 직후) 계좌별 평가금액 합계를 한 줄 추가하세요. "
                      "총자산 추이와 계좌별 비중 변화를 시계열로 볼 수 있습니다."),
-    ("⑤ 대시보드", "현재 총자산, 계좌별 요약, 목표 대비 괴리가 큰 종목을 한눈에 보여주는 요약 화면입니다."),
-    ("⑥ 차트", "총자산 추이, 계좌별 자산 추이, 목표비중 대비 현재비중, 계좌별 자산배분 파이차트를 모아둔 시트입니다."),
+    ("⑥ 대시보드", "현재 총자산, 계좌별 요약, 목표 대비 괴리가 큰 종목을 한눈에 보여주는 요약 화면입니다."),
+    ("⑦ 차트", "총자산 추이, 계좌별 자산 추이, 목표비중 대비 현재비중, 계좌별 자산배분 파이차트를 모아둔 시트입니다."),
 ]
 r = 5
 for title, desc in guide:
@@ -85,13 +88,25 @@ for title, desc in guide:
     ws0.row_dimensions[r].height = 32
     r += 2
 
+ws0.cell(row=r, column=2, value="자동화 스크립트 (scripts/ 폴더, 로컬 PC에서 python3 로 실행)").font = Font(bold=True, size=12, color=NAVY)
+r += 1
+for step in [
+    "· fetch_prices.py   : 계좌설정에 등록된 ETF들의 최근 종가를 받아와 현황_리밸런싱의 '현재가'를 자동으로 채웁니다.",
+    "· log_rebalance.py  : 현황_리밸런싱에서 매수/매도가 필요한 종목을 오늘 날짜로 리밸런싱_히스토리에 초안 기록합니다.",
+    "· refresh_etf_list.py : ETF전체목록 시트를 최신 상장 ETF 목록으로 갱신합니다.",
+    "(모두 한국거래소 공개 데이터를 사용하며, 별도 로그인/증권사 계정 연동이 필요 없습니다. 실행 전 pip install -r scripts/requirements.txt)",
+]:
+    ws0.cell(row=r, column=2, value=step)
+    r += 1
+r += 1
+
 ws0.cell(row=r, column=2, value="권장 루틴 (분기 1회, 약 10분)").font = Font(bold=True, size=12, color=NAVY)
 r += 1
 for step in [
-    "1) 증권사 앱에서 4계좌 각각의 보유수량·현재가를 확인",
-    "2) 현황_리밸런싱 시트의 보유수량/현재가 입력 → 매수·매도 수량 자동 산출 확인",
+    "1) python3 scripts/fetch_prices.py 실행 → 현황_리밸런싱의 현재가 자동 갱신",
+    "2) 증권사 앱에서 4계좌 각각의 실제 보유수량을 확인해 현황_리밸런싱에 입력 → 매수·매도 수량 자동 산출 확인",
     "3) 산출된 대로 각 계좌에서 실제 주문 실행",
-    "4) 체결 내역을 리밸런싱_히스토리에 한 줄씩 기록",
+    "4) python3 scripts/log_rebalance.py 실행 → 리밸런싱_히스토리에 오늘 날짜로 매수/매도 초안 기록, 실제 체결가로 수정",
     "5) 시계열_스냅샷에 이번 분기 계좌별 합계금액 한 줄 추가",
 ]:
     ws0.cell(row=r, column=2, value=step)
@@ -190,6 +205,31 @@ ws1.conditional_formatting.add(
 dv_type = DataValidation(type="list", formula1='"IRP,연금저축,ISA,일반계좌"', allow_blank=True)
 ws1.add_data_validation(dv_type)
 dv_type.add(f"B{DATA_START1}:B{DATA_END1+20}")
+
+# =====================================================================
+# 1-1. ETF전체목록 (참고용 - scripts/refresh_etf_list.py 로 자동 갱신)
+# =====================================================================
+ws_etf = wb.create_sheet("ETF전체목록")
+ws_etf.sheet_view.showGridLines = False
+for col, w in zip("ABCD", [10, 30, 20, 14]):
+    ws_etf.column_dimensions[col].width = w
+
+style_title(ws_etf, "A1", "상장 ETF 전체 목록 (참고용)")
+ws_etf["A2"] = ("종목 추가 시 여기서 이름으로 찾아 티커를 계좌설정에 복사하세요. "
+                "scripts/refresh_etf_list.py 를 실행하면 최신 상장 목록으로 자동 갱신됩니다 (수동 편집 불필요).")
+ws_etf["A2"].font = Font(italic=True, size=9, color="666666")
+ws_etf["A3"] = "기준일: (refresh_etf_list.py 실행 전에는 비어있음)"
+ws_etf["A3"].font = Font(italic=True, size=9, color="C00000")
+
+ETF_HEADER_ROW = 5
+etf_headers = ["티커", "ETF명", "기초지수", "최근종가"]
+for i, h in enumerate(etf_headers, start=1):
+    ws_etf.cell(row=ETF_HEADER_ROW, column=i, value=h)
+style_header(ws_etf, ETF_HEADER_ROW, 1, len(etf_headers))
+ws_etf.freeze_panes = f"A{ETF_HEADER_ROW + 1}"
+ws_etf.auto_filter.ref = f"A{ETF_HEADER_ROW}:D{ETF_HEADER_ROW + 1000}"
+for r in range(ETF_HEADER_ROW + 1, ETF_HEADER_ROW + 1001):
+    ws_etf.cell(row=r, column=4).number_format = KRW0
 
 # =====================================================================
 # 2. 현황_리밸런싱
@@ -384,7 +424,6 @@ ws4.freeze_panes = f"B{DATA_START4}"
 # =====================================================================
 ws5 = wb.create_sheet("대시보드")
 ws5.sheet_view.showGridLines = False
-wb.move_sheet("대시보드", offset=-4)  # 사용법 다음, 계좌설정 이전으로 이동
 
 for col, w in zip("ABCDEFG", [4, 22, 18, 18, 14, 14, 4]):
     ws5.column_dimensions[col].width = w
@@ -523,6 +562,9 @@ ws6.add_chart(pie, "K21")
 # =====================================================================
 # 시트 순서 & 활성 시트
 # =====================================================================
+DESIRED_ORDER = ["사용법", "대시보드", "계좌설정", "ETF전체목록", "현황_리밸런싱",
+                 "리밸런싱_히스토리", "시계열_스냅샷", "차트"]
+wb._sheets = [wb[name] for name in DESIRED_ORDER]
 wb.active = 0
 out_path = "연금자산관리_템플릿.xlsx"
 wb.save(out_path)
