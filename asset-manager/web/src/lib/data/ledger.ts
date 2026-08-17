@@ -162,8 +162,11 @@ export function buildLedger(data: AssetData, year: number, options: BuildOptions
       }
     })
 
-    if (isDebt) debtItemRows.push(...itemRows)
-    else assetItemRows.push(...itemRows)
+    // An item already contained in another one keeps its row and counts toward
+    // its own category subtotal, but never reaches 자산 합계 / 부채 합계 / 순자산.
+    const counted = itemRows.filter((row) => !row.item?.countedElsewhere)
+    if (isDebt) debtItemRows.push(...counted)
+    else assetItemRows.push(...counted)
 
     const subtotalCells = sumCells(itemRows, months)
     rows.push({

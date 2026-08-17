@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import type { Sheet } from '../google/sheets'
-import { combine, crossCheck, crossCheckDebt, parseBalanceSheet, parseHoldingsSheet } from './assetWorkbook'
+import {
+  combine,
+  crossCheck,
+  crossCheckDebt,
+  crossCheckNetWorth,
+  parseBalanceSheet,
+  parseHoldingsSheet,
+  type ExpectedTotals,
+} from './assetWorkbook'
 
 /**
  * Builds a sheet from a grid of plain values. A cell may be a string (rendered
@@ -148,7 +156,9 @@ function holdingsSheet(): Sheet {
 
   const row = (date: string, cash: number, deposit: number, loan: number, bank: number, total: number, note: Cell) => {
     const cells: Cell[] = [date, cash, deposit, 0, 0, 0, 0, 0]
-    while (cells.length < 11) cells.push(null)
+    // I 자산 = B~H, J 순자산 = I − T. 마통 is not a term here: the sheet's total
+    // debt is T alone, because 은행부채 already contains it.
+    cells.push(cash + deposit, cash + deposit - total, null)
     cells.push(loan, bank, null)
     while (cells.length < 19) cells.push(null)
     cells.push(total)
@@ -242,7 +252,69 @@ describe('crossCheckDebt', () => {
   it('tolerates rounding of a won or less', () => {
     expect(crossCheckDebt(new Map([['2010-01', -5300.4]]), new Map([['2010-01', 5300]]))).toEqual([])
   })
+
+  it('passes even while the app double counts 마통, because it only sums L~S', () => {
+    // The gap this check cannot close: it deliberately leaves 마통 out, so a
+    // 마통 counted twice across the two sheets never reaches it. Pinned here so
+    // nobody mistakes a green T check for a verified debt total.
+    const holdings = parseHoldingsSheet(holdingsSheet())
+    expect(crossCheckDebt(holdings.ownDebtTotals, holdings.expectedTotals.debt)).toEqual([])
+  })
 })
+
+describe('crossCheckNetWorth', () => {
+  function combined() {
+    return combine(parseBalanceSheet(balanceSheet()), parseHoldingsSheet(holdingsSheet()))
+  }
+
+  it('matches the sheet once 마통 is left out of the totals', () => {
+    // 자산 3,500 − 부채 5,300 = −1,800, which is column J.
+    const holdings = parseHoldingsSheet(holdingsSheet())
+    expect(crossCheckNetWorth(combined(), holdings.expectedTotals)).toEqual([])
+  })
+
+  it('catches 마통 counted twice — the case no other check can see', () => {
+    const holdings = parseHoldingsSheet(holdingsSheet())
+    const data = combined()
+    // Undo the exclusion, reproducing the bug: 마통 is added as its own debt
+    // while 은행부채 already contains it.
+    const doubleCounted = {
+      ...data,
+      items: data.items.map((item) => ({ ...item, countedElsewhere: undefined })),
+    }
+
+    const mismatches = crossCheckNetWorth(doubleCounted, holdings.expectedTotals)
+    expect(mismatches.map((m) => m.ym)).toEqual(['2010-01', '2010-02'])
+    // Off by exactly the 마통 balance of each month, and in the direction that
+    // understates net worth.
+    expect(mismatches[0]!.diff).toBe(-400)
+    expect(mismatches[1]!.diff).toBe(-300)
+    // Assets are untouched, which points at the debt side.
+    expect(mismatches[0]!.ourAsset).toBe(mismatches[0]!.sheetAsset)
+  })
+
+  it('reports the sheet and our figures side by side', () => {
+    const holdings = parseHoldingsSheet(holdingsSheet())
+    const tampered: ExpectedTotals = {
+      ...holdings.expectedTotals,
+      netWorth: new Map([['2010-01', 0]]),
+    }
+    expect(crossCheckNetWorth(combined(), tampered)).toEqual([
+      { ym: '2010-01', ourAsset: 3500, sheetAsset: 3500, ourNet: -1800, sheetNet: 0, diff: -1800 },
+    ])
+  })
+
+  it('skips months the sheet has no net worth for', () => {
+    const holdings = parseHoldingsSheet(holdingsSheet())
+    const empty: ExpectedTotals = { ...holdings.expectedTotals, netWorth: new Map() }
+    expect(crossCheckNetWorth(combined(), empty)).toEqual([])
+  })
+})
+
+/** An ExpectedTotals carrying only the category map the test cares about. */
+function totalsOf(byCategory: Map<string, Map<string, number>>): ExpectedTotals {
+  return { byCategory, debt: new Map(), asset: new Map(), netWorth: new Map() }
+}
 
 describe('crossCheck', () => {
   it('passes when our sums match the sheet totals', () => {
@@ -268,14 +340,14 @@ describe('crossCheck', () => {
 
   it('matches category names case-insensitively so ficc meets FICC', () => {
     const ours = new Map([['FICC', new Map([['2010-01', 100]])]])
-    const expected = { byCategory: new Map([['ficc', new Map([['2010-01', 100]])]]), debt: new Map() }
+    const expected = totalsOf(new Map([['ficc', new Map([['2010-01', 100]])]]))
     const { mismatches, unmatchedSheetCategories } = crossCheck(ours, expected)
     expect(mismatches).toEqual([])
     expect(unmatchedSheetCategories).toEqual([])
   })
 
   it('names sheet categories it could not pair up', () => {
-    const expected = { byCategory: new Map([['없는분류', new Map([['2010-01', 5]])]]), debt: new Map() }
+    const expected = totalsOf(new Map([['없는분류', new Map([['2010-01', 5]])]]))
     const { unmatchedSheetCategories } = crossCheck(new Map(), expected)
     expect(unmatchedSheetCategories).toEqual(['없는분류'])
   })

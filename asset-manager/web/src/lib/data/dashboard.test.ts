@@ -106,6 +106,57 @@ describe('summariseMonth', () => {
   })
 })
 
+describe('an item already counted inside another one', () => {
+  /** 마통 (i3) is contained in 은행부채, so no total may add it again. */
+  function contained(): AssetData {
+    const base = data()
+    return {
+      ...base,
+      items: base.items.map((item) =>
+        item.id === 'i3' ? { ...item, countedElsewhere: '은행부채에 포함' } : item,
+      ),
+    }
+  }
+
+  it('is left out of the monthly totals, on both sides', () => {
+    expect(monthlyTotals(contained())).toEqual([
+      // 마통 −500 no longer added to the 2,000 mortgage...
+      { ym: '2026-01', asset: 4000, debt: 2000, net: 2000 },
+      // ...nor its credit balance subtracted from the 1,900 one.
+      { ym: '2026-02', asset: 4500, debt: 1900, net: 2600 },
+    ])
+  })
+
+  it('does not leak into assets', () => {
+    // "debt, otherwise asset" would silently bank it as an asset.
+    expect(monthlyTotals(contained())[0]!.asset).toBe(4000)
+  })
+
+  it('is kept out of the composition bars', () => {
+    // A segment has to be part of the total the bar breaks down.
+    const summary = summariseMonth(contained(), '2026-01')!
+    expect(summary.debts.map((slice) => slice.name)).toEqual(['부채'])
+    expect(summary.debts[0]!.share).toBeCloseTo(1)
+    expect(summary.debtOffsets).toEqual([])
+  })
+
+  it('is reported with its reason, so the total never quietly disagrees', () => {
+    const summary = summariseMonth(contained(), '2026-01')!
+    expect(summary.excluded).toEqual([
+      { itemId: 'i3', name: '마통', amount: 500, reason: '은행부채에 포함' },
+    ])
+  })
+
+  it('still marks the month as having records', () => {
+    const onlyExcluded = contained()
+    onlyExcluded.snapshots = [{ itemId: 'i3', ym: '2026-01', amount: -500 }]
+    const summary = summariseMonth(onlyExcluded, '2026-01')
+    expect(summary).not.toBeNull()
+    expect(summary!.debt).toBe(0)
+    expect(monthlyTotals(onlyExcluded).map((month) => month.ym)).toEqual(['2026-01'])
+  })
+})
+
 describe('changeAgainstPrevious', () => {
   const totals: MonthTotals[] = [
     { ym: '2026-01', asset: 4000, debt: 2500, net: 1500 },

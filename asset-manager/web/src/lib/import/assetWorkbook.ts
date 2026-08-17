@@ -17,7 +17,17 @@
 import type { CellData, Sheet } from '../google/sheets'
 import { columnLetter } from '../google/sheets'
 import { parseMonthToken } from '../inspect/patterns'
-import type { Category, ImportAdjustment, Item, MonthlyNote, Snapshot, YearMonth } from '../data/model'
+import type {
+  AssetData,
+  Category,
+  ImportAdjustment,
+  Item,
+  MonthlyNote,
+  Snapshot,
+  YearMonth,
+} from '../data/model'
+import { emptyData } from '../data/model'
+import { monthlyTotals } from '../data/dashboard'
 import { deltaFor } from './adjustments'
 
 /**
@@ -33,6 +43,8 @@ const ROW_FIRST_DATA = 5
 
 /** Column indices (0-based) in 자산보유현황. */
 const HOLDINGS_ASSET_TOTALS = { start: 1, end: 8 } // B~H, category totals
+const HOLDINGS_ASSET_TOTAL = 8 // I, 자산
+const HOLDINGS_NET_WORTH = 9 // J, 순자산
 const HOLDINGS_DEBT = { start: 11, end: 19 } // L~S, debt input
 const HOLDINGS_DEBT_TOTAL = 19 // T
 const HOLDINGS_NOTE = 23 // X
@@ -42,6 +54,20 @@ const HOLDINGS_NOTE = 23 // X
  * overdraft line: money owed, recorded there with a negative sign.
  */
 const DEBT_CATEGORIES = new Set(['마통'])
+
+/**
+ * Categories whose balance is already inside one of the L~S debt columns, and
+ * where.
+ *
+ * 마통 is entered in 잔액입력 for the monthly detail, but 자산보유현황's 은행부채
+ * column already contains it — the workbook's own total debt is T = sum(L~S), so
+ * adding 마통 on top counted it twice. This lives beside DEBT_CATEGORIES because
+ * it is the same sort of knowledge: a fact about how this workbook is laid out,
+ * not a number.
+ */
+const CONTAINED_IN: Record<string, string> = {
+  마통: '자산보유현황 은행부채에 포함',
+}
 
 const CATEGORY_COLORS = [
   'emerald',
@@ -75,6 +101,10 @@ export interface ExpectedTotals {
   byCategory: Map<string, Map<YearMonth, number>>
   /** ym -> total debt, as a positive number the way the sheet writes it. */
   debt: Map<YearMonth, number>
+  /** ym -> 자산 (I열). */
+  asset: Map<YearMonth, number>
+  /** ym -> 순자산 (J열). */
+  netWorth: Map<YearMonth, number>
 }
 
 export interface ParsedBalances {
@@ -221,6 +251,7 @@ export function parseBalanceSheet(
       hidden: false,
       order: items.length + 1,
       ...(def.subCategory ? { subCategory: def.subCategory } : {}),
+      ...(CONTAINED_IN[def.category] ? { countedElsewhere: CONTAINED_IN[def.category] } : {}),
       sourceKey: def.sourceKey,
     })
   }
@@ -332,6 +363,8 @@ export function parseHoldingsSheet(
   const notes: MonthlyNote[] = []
   const byCategory = new Map<string, Map<YearMonth, number>>()
   const debtTotals = new Map<YearMonth, number>()
+  const assetTotals = new Map<YearMonth, number>()
+  const netWorths = new Map<YearMonth, number>()
   /** Our own L~S sum per month, to compare against the sheet's T column. */
   const debtSums = new Map<YearMonth, number>()
   let adjustedCells = 0
@@ -377,6 +410,12 @@ export function parseHoldingsSheet(
     const debtTotal = numberAt(rows, r, HOLDINGS_DEBT_TOTAL)
     if (debtTotal !== null) debtTotals.set(ym, debtTotal)
 
+    const assetTotal = numberAt(rows, r, HOLDINGS_ASSET_TOTAL)
+    if (assetTotal !== null) assetTotals.set(ym, assetTotal)
+
+    const net = numberAt(rows, r, HOLDINGS_NET_WORTH)
+    if (net !== null) netWorths.set(ym, net)
+
     const note = text(rows, r, HOLDINGS_NOTE)
     if (note) notes.push({ module: 'ASSET', ym, status: 'DONE', body: note })
   }
@@ -393,11 +432,66 @@ export function parseHoldingsSheet(
     items,
     snapshotsBySourceKey,
     notes,
-    expectedTotals: { byCategory, debt: debtTotals },
+    expectedTotals: { byCategory, debt: debtTotals, asset: assetTotals, netWorth: netWorths },
     ownDebtTotals: debtSums,
     adjustedCells,
     creditCells,
   }
+}
+
+export interface NetWorthMismatch {
+  ym: YearMonth
+  ourAsset: number
+  sheetAsset: number
+  ourNet: number
+  sheetNet: number
+  /** ourNet − sheetNet. */
+  diff: number
+}
+
+/**
+ * Compares the dataset we are about to import against the sheet's own 자산 (I열)
+ * and 순자산 (J열).
+ *
+ * **This runs the app's own aggregation, deliberately.** `combine()`'s output is
+ * fed to `monthlyTotals` — the same function the dashboard and ledger totals come
+ * from. Summing the columns again here would only verify a copy of the logic, and
+ * a double count would reproduce itself in the copy and pass.
+ *
+ * It is also the only check that can see a value counted twice from two different
+ * sheets. The per-category check reads 잔액입력 against B~H; the debt check reads
+ * L~S against T. Each verifies its own slice, so an item present in both slices
+ * passes both while the totals on screen are wrong. That is exactly how 마통 —
+ * entered in 잔액입력 and again inside 은행부채 — went unnoticed.
+ */
+export function crossCheckNetWorth(
+  combined: Pick<AssetData, 'categories' | 'items' | 'snapshots'>,
+  expected: ExpectedTotals,
+  tolerance = 1,
+): NetWorthMismatch[] {
+  const totals = monthlyTotals({ ...emptyData(), ...combined })
+  const ourByYm = new Map(totals.map((month) => [month.ym, month]))
+
+  const mismatches: NetWorthMismatch[] = []
+  for (const [ym, sheetNet] of expected.netWorth) {
+    const ours = ourByYm.get(ym)
+    if (!ours) continue
+
+    const diff = ours.net - sheetNet
+    if (Math.abs(diff) > tolerance) {
+      mismatches.push({
+        ym,
+        ourAsset: ours.asset,
+        sheetAsset: expected.asset.get(ym) ?? 0,
+        ourNet: ours.net,
+        sheetNet,
+        diff,
+      })
+    }
+  }
+
+  mismatches.sort((a, b) => a.ym.localeCompare(b.ym))
+  return mismatches
 }
 
 export interface DebtMismatch {

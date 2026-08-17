@@ -17,13 +17,23 @@ export interface MonthTotals {
   net: number
 }
 
-/** Which items are debts, resolved once instead of per snapshot. */
-function debtItemIds(data: AssetData): ReadonlySet<string> {
-  const debtCategories = new Set(
-    data.categories.filter((category) => category.kind === 'DEBT').map((category) => category.id),
-  )
-  return new Set(
-    data.items.filter((item) => debtCategories.has(item.categoryId)).map((item) => item.id),
+type Side = 'ASSET' | 'DEBT' | 'EXCLUDED'
+
+/**
+ * Which side of the balance sheet each item counts on, resolved once instead of
+ * per snapshot.
+ *
+ * Three-way rather than a boolean on purpose. Written as "debt, otherwise
+ * asset", an item that belongs in neither would silently be counted as an asset
+ * — which is how the 마통 double count stayed invisible.
+ */
+function sideByItem(data: AssetData): ReadonlyMap<string, Side> {
+  const kindOf = new Map(data.categories.map((category) => [category.id, category.kind]))
+  return new Map(
+    data.items.map((item) => [
+      item.id,
+      item.countedElsewhere ? 'EXCLUDED' : kindOf.get(item.categoryId) === 'DEBT' ? 'DEBT' : 'ASSET',
+    ]),
   )
 }
 
@@ -32,16 +42,21 @@ function debtItemIds(data: AssetData): ReadonlySet<string> {
  * one record appear — an absent month means "not entered", which is not zero.
  */
 export function monthlyTotals(data: AssetData): MonthTotals[] {
-  const debts = debtItemIds(data)
+  const sides = sideByItem(data)
   const byYm = new Map<YearMonth, { asset: number; debt: number }>()
 
   for (const snapshot of data.snapshots) {
-    const isDebt = debts.has(snapshot.itemId)
+    const side = sides.get(snapshot.itemId)
+    if (side === undefined) continue
+    // The month still counts as recorded, so a month holding only excluded items
+    // does not vanish from the series.
     const entry = byYm.get(snapshot.ym) ?? { asset: 0, debt: 0 }
-    const value = displayAmount(snapshot.amount, isDebt)
-    if (isDebt) entry.debt += value
-    else entry.asset += value
     byYm.set(snapshot.ym, entry)
+    if (side === 'EXCLUDED') continue
+
+    const value = displayAmount(snapshot.amount, side === 'DEBT')
+    if (side === 'DEBT') entry.debt += value
+    else entry.asset += value
   }
 
   return [...byYm.entries()]
@@ -75,6 +90,15 @@ export interface MonthSummary {
    * be a segment of the composition bar.
    */
   debtOffsets: CategorySlice[]
+  /**
+   * Items left out of every total because another item already contains them.
+   * Surfaced so the totals never quietly disagree with the rows.
+   */
+  excluded: { itemId: string; name: string; amount: number; reason: string }[]
+}
+
+function kindOf(data: AssetData, categoryId: string): Category['kind'] | undefined {
+  return data.categories.find((category) => category.id === categoryId)?.kind
 }
 
 function slices(
@@ -101,9 +125,10 @@ function slices(
 
 /** Everything one month's cards need. Null when that month holds no records. */
 export function summariseMonth(data: AssetData, ym: YearMonth): MonthSummary | null {
-  const debts = debtItemIds(data)
-  const categoryOf = new Map(data.items.map((item) => [item.id, item.categoryId]))
+  const sides = sideByItem(data)
+  const itemById = new Map(data.items.map((item) => [item.id, item]))
   const byCategory = new Map<string, number>()
+  const excluded: MonthSummary['excluded'] = []
 
   let asset = 0
   let debt = 0
@@ -111,15 +136,28 @@ export function summariseMonth(data: AssetData, ym: YearMonth): MonthSummary | n
 
   for (const snapshot of data.snapshots) {
     if (snapshot.ym !== ym) continue
-    const categoryId = categoryOf.get(snapshot.itemId)
-    if (!categoryId) continue
+    const item = itemById.get(snapshot.itemId)
+    const side = sides.get(snapshot.itemId)
+    if (!item || side === undefined) continue
 
     found = true
-    const isDebt = debts.has(snapshot.itemId)
-    const value = displayAmount(snapshot.amount, isDebt)
-    if (isDebt) debt += value
+
+    if (side === 'EXCLUDED') {
+      // Kept out of byCategory as well: a composition segment must be part of
+      // the total the bar is a breakdown of.
+      excluded.push({
+        itemId: item.id,
+        name: item.name,
+        amount: displayAmount(snapshot.amount, kindOf(data, item.categoryId) === 'DEBT'),
+        reason: item.countedElsewhere!,
+      })
+      continue
+    }
+
+    const value = displayAmount(snapshot.amount, side === 'DEBT')
+    if (side === 'DEBT') debt += value
     else asset += value
-    byCategory.set(categoryId, (byCategory.get(categoryId) ?? 0) + value)
+    byCategory.set(item.categoryId, (byCategory.get(item.categoryId) ?? 0) + value)
   }
 
   if (!found) return null
@@ -136,6 +174,7 @@ export function summariseMonth(data: AssetData, ym: YearMonth): MonthSummary | n
     assets: slices(byCategory, assetCategories, (amount) => amount > 0),
     debts: slices(byCategory, debtCategories, (amount) => amount > 0),
     debtOffsets: slices(byCategory, debtCategories, (amount) => amount < 0),
+    excluded,
   }
 }
 

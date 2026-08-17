@@ -292,6 +292,14 @@ function Row({
             <span className="shrink-0 text-[10px] opacity-50">{row.item.subCategory}</span>
           )}
 
+          {/* Without this the row would appear to be missing from the totals
+              below it, with nothing on screen explaining why. */}
+          {row.kind === 'item' && row.item?.countedElsewhere && (
+            <span className="shrink-0" title={`합계 제외 — ${row.item.countedElsewhere}`}>
+              <Badge tone="warn">합계 제외</Badge>
+            </span>
+          )}
+
           {row.kind === 'item' && row.item && !renaming && (
             <span className="ml-auto flex shrink-0 items-center gap-1 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
               <button
