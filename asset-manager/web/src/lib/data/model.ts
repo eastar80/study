@@ -82,6 +82,30 @@ export interface Goal {
   target: number
 }
 
+/**
+ * A correction applied to the source workbook during import.
+ *
+ * Some values in the spreadsheet are known to be wrong — a bond left at face
+ * value after it became worthless, for instance — and the sheet's own aggregate
+ * columns already exclude them. Rather than hardcoding such a number in the
+ * importer (it is data, not logic) or editing hundreds of cells by hand, the
+ * correction is stored as a rule and reapplied on every import.
+ *
+ * Items are addressed by `sourceKey`, the source column letter, because item ids
+ * are reassigned on each import while the column stays put.
+ */
+export interface ImportAdjustment {
+  sourceKey: string
+  sheet: 'BALANCE' | 'HOLDINGS'
+  /** Inclusive. Omit for "from the beginning". */
+  fromYm?: YearMonth
+  /** Inclusive. Omit for "until the end". */
+  toYm?: YearMonth
+  /** Added to the stored amount. Negative to reduce an overstated balance. */
+  delta: number
+  reason: string
+}
+
 export interface AssetData {
   version: 1
   settings: Settings
@@ -91,6 +115,8 @@ export interface AssetData {
   fxRates: FxRate[]
   notes: MonthlyNote[]
   goals: Goal[]
+  /** Corrections reapplied on every import. See ImportAdjustment. */
+  importAdjustments: ImportAdjustment[]
 }
 
 export function emptyData(): AssetData {
@@ -103,6 +129,7 @@ export function emptyData(): AssetData {
     fxRates: [],
     notes: [],
     goals: [],
+    importAdjustments: [],
   }
 }
 
@@ -124,5 +151,6 @@ export function normaliseData(raw: unknown): AssetData {
     fxRates: Array.isArray(input.fxRates) ? input.fxRates : [],
     notes: Array.isArray(input.notes) ? input.notes : [],
     goals: Array.isArray(input.goals) ? input.goals : [],
+    importAdjustments: Array.isArray(input.importAdjustments) ? input.importAdjustments : [],
   }
 }

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { hasCredentials } from '../config'
 import { describeUnsupportedFile, pickSpreadsheet, type PickedFile } from '../lib/google/picker'
 import { getSheetGrid, getSpreadsheetOutline, type Sheet } from '../lib/google/sheets'
@@ -8,11 +8,16 @@ import {
   parseBalanceSheet,
   parseHoldingsSheet,
   type Mismatch,
-  type ParsedBalances,
-  type ParsedHoldings,
 } from '../lib/import/assetWorkbook'
+import {
+  adjustmentKey,
+  describeAdjustment,
+  suggestFromMismatches,
+  type AdjustmentSuggestion,
+} from '../lib/import/adjustments'
+import type { ImportAdjustment, Item } from '../lib/data/model'
 import type { Vault } from '../state/useVault'
-import { Alert, Badge, Button, Card, Muted } from '../ui/primitives'
+import { Alert, Badge, Button, Card, Field, Muted, TextInput } from '../ui/primitives'
 
 const BALANCE_SHEET = '잔액입력'
 const HOLDINGS_SHEET = '자산보유현황'
@@ -21,27 +26,48 @@ const HOLDINGS_SHEET = '자산보유현황'
 const READ_ROWS = 1000
 const READ_COLS = 300
 
-interface Preview {
-  file: PickedFile
-  balances: ParsedBalances
-  holdings: ParsedHoldings
-  merged: ReturnType<typeof combine>
-  check: ReturnType<typeof crossCheck>
-}
-
 const won = new Intl.NumberFormat('ko-KR')
 
+interface LoadedSheets {
+  file: PickedFile
+  balance: Sheet
+  holdings: Sheet
+}
+
 export function Import({ vault, signedIn, onConnect }: { vault: Vault; signedIn: boolean; onConnect: () => void }) {
-  const [preview, setPreview] = useState<Preview | null>(null)
+  const [sheets, setSheets] = useState<LoadedSheets | null>(null)
   const [progress, setProgress] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [imported, setImported] = useState(false)
+  const [registering, setRegistering] = useState<AdjustmentSuggestion | null>(null)
 
   const ready = hasCredentials()
+  const adjustments = vault.data.importAdjustments
+
+  /**
+   * Parsing is derived from the loaded grids and the current rules, so
+   * registering a correction re-runs the cross-check without re-reading Sheets.
+   */
+  const preview = useMemo(() => {
+    if (!sheets) return null
+    const balances = parseBalanceSheet(sheets.balance, adjustments)
+    const holdings = parseHoldingsSheet(sheets.holdings, adjustments)
+    return {
+      balances,
+      holdings,
+      merged: combine(balances, holdings),
+      check: crossCheck(balances.ownTotals, holdings.expectedTotals),
+    }
+  }, [sheets, adjustments])
+
+  const suggestions = useMemo(
+    () => (preview ? suggestFromMismatches(preview.check.mismatches) : null),
+    [preview],
+  )
 
   async function load() {
     setError(null)
-    setPreview(null)
+    setSheets(null)
     setImported(false)
     try {
       const file = await pickSpreadsheet()
@@ -66,22 +92,33 @@ export function Import({ vault, signedIn, onConnect }: { vault: Vault; signedIn:
       }
 
       setProgress(`"${BALANCE_SHEET}" 읽는 중…`)
-      const balanceSheet = await readSheet(file.id, BALANCE_SHEET)
+      const balance = await readSheet(file.id, BALANCE_SHEET)
       setProgress(`"${HOLDINGS_SHEET}" 읽는 중…`)
-      const holdingsSheet = await readSheet(file.id, HOLDINGS_SHEET)
+      const holdings = await readSheet(file.id, HOLDINGS_SHEET)
 
-      setProgress('구조 해석 중…')
-      const balances = parseBalanceSheet(balanceSheet)
-      const holdings = parseHoldingsSheet(holdingsSheet)
-      const merged = combine(balances, holdings)
-      const check = crossCheck(balances.ownTotals, holdings.expectedTotals)
-
-      setPreview({ file, balances, holdings, merged, check })
+      setSheets({ file, balance, holdings })
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
       setProgress(null)
     }
+  }
+
+  function addAdjustment(adjustment: ImportAdjustment) {
+    vault.update((draft) => ({
+      ...draft,
+      importAdjustments: [...draft.importAdjustments, adjustment],
+    }))
+    setRegistering(null)
+  }
+
+  function removeAdjustment(target: ImportAdjustment) {
+    vault.update((draft) => ({
+      ...draft,
+      importAdjustments: draft.importAdjustments.filter(
+        (candidate) => adjustmentKey(candidate) !== adjustmentKey(target),
+      ),
+    }))
   }
 
   function apply() {
@@ -98,6 +135,7 @@ export function Import({ vault, signedIn, onConnect }: { vault: Vault; signedIn:
   }
 
   const passes = preview !== null && preview.check.mismatches.length === 0
+  const adjustedCells = preview ? preview.balances.adjustedCells + preview.holdings.adjustedCells : 0
 
   return (
     <div className="space-y-5">
@@ -120,9 +158,9 @@ export function Import({ vault, signedIn, onConnect }: { vault: Vault; signedIn:
           {ready && signedIn && (
             <div className="flex flex-wrap items-center gap-3">
               <Button onClick={load} disabled={progress !== null}>
-                {progress ? '읽는 중…' : preview ? '다시 읽기' : '자산현황 파일 선택'}
+                {progress ? '읽는 중…' : sheets ? '다시 읽기' : '자산현황 파일 선택'}
               </Button>
-              {preview && <Badge tone="brand">{preview.file.name}</Badge>}
+              {sheets && <Badge tone="brand">{sheets.file.name}</Badge>}
             </div>
           )}
 
@@ -130,6 +168,37 @@ export function Import({ vault, signedIn, onConnect }: { vault: Vault; signedIn:
           {error && <Alert tone="error">{error}</Alert>}
         </div>
       </Card>
+
+      {adjustments.length > 0 && (
+        <Card title={`적용 중인 보정 ${adjustments.length}건`}>
+          <div className="space-y-3">
+            <Muted>
+              원본 시트의 값이 실제와 다를 때 쓰는 규칙입니다. 데이터에 저장되므로 <strong>다시
+              가져와도 유지됩니다.</strong> 시트를 직접 고치셨다면 여기서 규칙을 지우세요.
+            </Muted>
+            <ul className="space-y-2">
+              {adjustments.map((adjustment) => (
+                <li
+                  key={adjustmentKey(adjustment)}
+                  className="flex flex-wrap items-center gap-3 rounded-xl border px-3 py-2 text-sm"
+                  style={{ borderColor: 'var(--line)' }}
+                >
+                  <span className="font-mono text-xs">{describeAdjustment(adjustment)}</span>
+                  <span className="min-w-0 flex-1 truncate" style={{ color: 'var(--ink-muted)' }}>
+                    {adjustment.reason}
+                  </span>
+                  <Button variant="danger" onClick={() => removeAdjustment(adjustment)}>
+                    삭제
+                  </Button>
+                </li>
+              ))}
+            </ul>
+            {adjustedCells > 0 && (
+              <Muted>이번 읽기에서 {won.format(adjustedCells)}개 셀에 반영되었습니다.</Muted>
+            )}
+          </div>
+        </Card>
+      )}
 
       {preview && (
         <>
@@ -193,7 +262,55 @@ export function Import({ vault, signedIn, onConnect }: { vault: Vault; signedIn:
               {passes ? (
                 <Alert tone="info">모든 월·모든 분류의 합계가 일치합니다.</Alert>
               ) : (
-                <MismatchTable mismatches={preview.check.mismatches} />
+                <>
+                  {suggestions && suggestions.suggestions.length > 0 && (
+                    <div className="space-y-2">
+                      <SectionTitle>규칙 하나로 덮을 수 있는 차이</SectionTitle>
+                      {suggestions.suggestions.map((suggestion) => (
+                        <div
+                          key={suggestion.category}
+                          className="flex flex-wrap items-center gap-3 rounded-xl border px-3 py-2 text-sm"
+                          style={{ borderColor: 'var(--line)' }}
+                        >
+                          <Badge tone="warn">{suggestion.category}</Badge>
+                          <span className="tnum">
+                            {suggestion.fromYm} ~ {suggestion.toYm} ({suggestion.monthCount}개월) ·{' '}
+                            <strong>
+                              {suggestion.delta > 0 ? '+' : '−'}
+                              {won.format(Math.abs(suggestion.delta))}원
+                            </strong>
+                          </span>
+                          <Button onClick={() => setRegistering(suggestion)}>보정 등록</Button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {suggestions && suggestions.rejected.length > 0 && (
+                    <Alert tone="warn">
+                      <strong>규칙 하나로 덮을 수 없는 분류</strong>
+                      <ul className="mt-2 list-disc space-y-1 pl-5">
+                        {suggestions.rejected.map((entry) => (
+                          <li key={entry.category}>
+                            <strong>{entry.category}</strong> — {entry.reason}
+                          </li>
+                        ))}
+                      </ul>
+                    </Alert>
+                  )}
+
+                  {registering && preview && (
+                    <AdjustmentForm
+                      suggestion={registering}
+                      items={preview.merged.items}
+                      categoryName={registering.category}
+                      onCancel={() => setRegistering(null)}
+                      onSubmit={addAdjustment}
+                    />
+                  )}
+
+                  <MismatchTable mismatches={preview.check.mismatches} />
+                </>
               )}
             </div>
           </Card>
@@ -246,20 +363,20 @@ export function Import({ vault, signedIn, onConnect }: { vault: Vault; signedIn:
             <div className="space-y-4">
               {!passes && (
                 <Alert tone="error">
-                  합계가 맞지 않는 상태로는 가져올 수 없습니다. 어느 분류·어느 월이 틀렸는지 위 표를
-                  알려주시면 해석 규칙을 고치겠습니다.
+                  합계가 맞지 않는 상태로는 가져올 수 없습니다. 위에서 보정을 등록하거나, 어느 분류·어느
+                  월이 틀렸는지 알려주시면 해석 규칙을 고치겠습니다.
                 </Alert>
               )}
 
               <Alert tone="warn">
-                가져오기는 현재 앱의 <strong>분류·항목·월별 기록·노트를 모두 덮어씁니다.</strong> 지금은
-                비어 있으니 처음 가져올 때는 문제가 없습니다.
+                가져오기는 현재 앱의 <strong>분류·항목·월별 기록·노트를 덮어씁니다.</strong> 보정 규칙과
+                환경 설정은 유지됩니다.
               </Alert>
 
               {imported ? (
                 <Alert tone="info">
                   가져왔습니다. Drive의 <code>/Asset Manager/data.json</code> 에 저장됩니다
-                  {vault.dirty ? ' (저장 중…)' : ''}.
+                  {vault.dirty ? ' (저장 중…)' : ''}. <strong>자산 관리</strong> 화면에서 확인하세요.
                 </Alert>
               ) : (
                 <Button onClick={apply} disabled={!passes}>
@@ -279,6 +396,90 @@ async function readSheet(spreadsheetId: string, title: string): Promise<Sheet> {
   const sheet = response.sheets?.[0]
   if (!sheet) throw new Error(`"${title}" 시트를 읽지 못했습니다.`)
   return sheet
+}
+
+/**
+ * The suggestion knows the category, the amount and the range, but not which
+ * item in that category holds the wrong value — only the user knows that.
+ */
+function AdjustmentForm({
+  suggestion,
+  items,
+  categoryName,
+  onCancel,
+  onSubmit,
+}: {
+  suggestion: AdjustmentSuggestion
+  items: Item[]
+  categoryName: string
+  onCancel: () => void
+  onSubmit: (adjustment: ImportAdjustment) => void
+}) {
+  // Items keep their source column, which is what the rule addresses.
+  const candidates = items.filter((item) => item.sourceKey)
+  const [sourceKey, setSourceKey] = useState('')
+  const [reason, setReason] = useState('')
+
+  const chosen = candidates.find((item) => item.sourceKey === sourceKey)
+
+  return (
+    <div className="space-y-4 rounded-xl border p-4" style={{ borderColor: 'var(--line)' }}>
+      <SectionTitle>보정 등록 — {categoryName}</SectionTitle>
+
+      <Muted>
+        {suggestion.fromYm} ~ {suggestion.toYm} 구간에서 이 분류의 합계가 시트보다{' '}
+        {won.format(Math.abs(suggestion.delta))}원 {suggestion.delta < 0 ? '큽니다' : '작습니다'}.
+        <strong> 어느 항목에서 조정할지 골라 주세요.</strong>
+      </Muted>
+
+      <Field label="항목" hint="원본 시트의 컬럼 문자로 규칙이 저장되므로, 다시 가져와도 같은 항목에 적용됩니다.">
+        <select
+          value={sourceKey}
+          onChange={(event) => setSourceKey(event.target.value)}
+          className="w-full rounded-xl border bg-transparent px-3 py-2 text-sm"
+          style={{ borderColor: 'var(--line)' }}
+        >
+          <option value="">— 선택 —</option>
+          {candidates.map((item) => (
+            <option key={item.id} value={item.sourceKey}>
+              {item.sourceKey}열 · {item.name}
+            </option>
+          ))}
+        </select>
+      </Field>
+
+      <Field label="사유" hint="나중에 이 숫자가 시트와 다른 이유를 설명해 줍니다.">
+        <TextInput value={reason} onChange={setReason} placeholder="예: 무가치 채권이 액면가로 남아 있음" />
+      </Field>
+
+      <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
+        <Stat label="적용 금액" value={`${suggestion.delta > 0 ? '+' : '−'}${won.format(Math.abs(suggestion.delta))}원`} />
+        <Stat label="적용 기간" value={`${suggestion.fromYm} ~ ${suggestion.toYm}`} />
+      </dl>
+
+      <div className="flex flex-wrap gap-2">
+        <Button
+          onClick={() =>
+            onSubmit({
+              sourceKey,
+              sheet: 'BALANCE',
+              fromYm: suggestion.fromYm,
+              toYm: suggestion.toYm,
+              delta: suggestion.delta,
+              reason: reason.trim() || `${categoryName} 합계 보정`,
+            })
+          }
+          disabled={!chosen}
+        >
+          등록
+        </Button>
+        <Button variant="ghost" onClick={onCancel}>
+          취소
+        </Button>
+        {!chosen && <Muted>항목을 골라야 등록할 수 있습니다.</Muted>}
+      </div>
+    </div>
+  )
 }
 
 function MismatchTable({ mismatches }: { mismatches: Mismatch[] }) {
@@ -317,7 +518,9 @@ function MismatchTable({ mismatches }: { mismatches: Mismatch[] }) {
         </table>
       </div>
       {mismatches.length > shown.length && (
-        <Muted>총 {mismatches.length}건 중 앞 {shown.length}건만 표시했습니다.</Muted>
+        <Muted>
+          총 {mismatches.length}건 중 앞 {shown.length}건만 표시했습니다.
+        </Muted>
       )}
     </div>
   )
