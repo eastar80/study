@@ -110,6 +110,8 @@ export interface InspectionReport {
   sheets: SheetReport[]
   /** Sheets that were not analysed, and why — never dropped silently. */
   skipped: SkippedSheet[]
+  /** Titles the run was limited to, or null when every sheet was attempted. */
+  requestedTitles: string[] | null
   /** Notes for a human reader — ambiguities the inspector could not settle. */
   warnings: string[]
 }
