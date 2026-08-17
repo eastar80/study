@@ -45,6 +45,8 @@ export interface SheetProperties {
   sheetId: number
   title: string
   index: number
+  /** 'GRID' for normal sheets, 'OBJECT' for chart-only sheets that have no cells. */
+  sheetType?: string
   gridProperties?: {
     rowCount?: number
     columnCount?: number
@@ -129,7 +131,10 @@ export function getSheetGrid(
   maxRows: number,
   maxCols: number,
 ): Promise<Spreadsheet> {
-  const range = encodeURIComponent(`${quoteTitle(title)}!A1:${columnLetter(maxCols - 1)}${maxRows}`)
+  // A zero or negative bound would build a range Sheets rejects with 400.
+  const rows = Math.max(1, maxRows)
+  const cols = Math.max(1, maxCols)
+  const range = encodeURIComponent(`${quoteTitle(title)}!A1:${columnLetter(cols - 1)}${rows}`)
   const fields = encodeURIComponent(
     'sheets(properties,merges,data(rowData(values(formattedValue,note,effectiveValue,effectiveFormat(numberFormat,backgroundColor,textFormat,horizontalAlignment)))))',
   )

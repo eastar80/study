@@ -156,6 +156,19 @@ export function Inspect({ signedIn, onConnect }: { signedIn: boolean; onConnect:
                 {new Date(report.generatedAtIso).toLocaleString('ko-KR')}
               </Muted>
 
+              {report.skipped.length > 0 && (
+                <Alert tone="info">
+                  <strong>건너뛴 시트 {report.skipped.length}개</strong>
+                  <ul className="mt-2 list-disc space-y-1 pl-5">
+                    {report.skipped.map((entry) => (
+                      <li key={entry.title}>
+                        <span className="font-medium">{entry.title}</span> — {entry.reason}
+                      </li>
+                    ))}
+                  </ul>
+                </Alert>
+              )}
+
               {report.warnings.length > 0 && (
                 <Alert tone="warn">
                   <strong>확인이 필요한 점</strong>

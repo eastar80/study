@@ -97,12 +97,19 @@ export interface SheetReport {
   redactedSamples: string[][]
 }
 
+export interface SkippedSheet {
+  title: string
+  reason: string
+}
+
 export interface InspectionReport {
   generatedAtIso: string
   spreadsheetTitle: string
   locale: string | null
   sheetCount: number
   sheets: SheetReport[]
+  /** Sheets that were not analysed, and why — never dropped silently. */
+  skipped: SkippedSheet[]
   /** Notes for a human reader — ambiguities the inspector could not settle. */
   warnings: string[]
 }
