@@ -31,6 +31,7 @@ import type {
   RowProfile,
   SheetNature,
   SheetReport,
+  SkippedSheet,
 } from './types'
 
 const MAX_ROWS = 400
@@ -509,7 +510,13 @@ function collectWarnings(sheets: SheetReport[]): string[] {
   return warnings
 }
 
-/** Reads every visible sheet in the spreadsheet and builds the report. */
+/**
+ * Reads every sheet in the spreadsheet and builds the report.
+ *
+ * A single unreadable sheet must not sink the whole run: a real workbook tends
+ * to carry chart-only sheets and leftovers alongside the ledger, and the ledger
+ * is what matters. Failures are collected per sheet and reported.
+ */
 export async function inspectSpreadsheet(
   spreadsheetId: string,
   onProgress?: (message: string) => void,
@@ -519,18 +526,43 @@ export async function inspectSpreadsheet(
   const sheetProps = (outline.sheets ?? []).map((s) => s.properties)
 
   const reports: SheetReport[] = []
-  for (const props of sheetProps) {
-    onProgress?.(`"${props.title}" 구조 분석 중… (${reports.length + 1}/${sheetProps.length})`)
-    const rows = Math.min(props.gridProperties?.rowCount ?? MAX_ROWS, MAX_ROWS)
-    const cols = Math.min(props.gridProperties?.columnCount ?? MAX_COLS, MAX_COLS)
+  const skipped: SkippedSheet[] = []
 
-    const grid: Spreadsheet = await getSheetGrid(spreadsheetId, props.title, rows, cols)
-    const sheet = grid.sheets?.[0]
-    if (!sheet) continue
+  for (let i = 0; i < sheetProps.length; i++) {
+    const props = sheetProps[i]!
+    onProgress?.(`"${props.title}" 구조 분석 중… (${i + 1}/${sheetProps.length})`)
 
-    // The ranged read returns properties for the requested sheet only, but the
-    // outline carries the authoritative dimensions.
-    reports.push(analyseSheet({ ...sheet, properties: { ...props, ...sheet.properties } }, rows, cols))
+    // Chart-only sheets ('OBJECT') have no cells at all, so any A1 range is
+    // invalid and Sheets answers 400.
+    if (props.sheetType && props.sheetType !== 'GRID') {
+      skipped.push({ title: props.title, reason: `셀이 없는 시트입니다 (${props.sheetType}, 차트 전용).` })
+      continue
+    }
+    if (!props.gridProperties?.rowCount || !props.gridProperties?.columnCount) {
+      skipped.push({ title: props.title, reason: '격자 크기 정보가 없어 읽을 범위를 정할 수 없습니다.' })
+      continue
+    }
+
+    const rows = Math.min(props.gridProperties.rowCount, MAX_ROWS)
+    const cols = Math.min(props.gridProperties.columnCount, MAX_COLS)
+
+    try {
+      const grid: Spreadsheet = await getSheetGrid(spreadsheetId, props.title, rows, cols)
+      const sheet = grid.sheets?.[0]
+      if (!sheet) {
+        skipped.push({ title: props.title, reason: '응답에 셀 데이터가 없습니다.' })
+        continue
+      }
+
+      // The ranged read returns properties for the requested sheet only, but the
+      // outline carries the authoritative dimensions.
+      reports.push(analyseSheet({ ...sheet, properties: { ...props, ...sheet.properties } }, rows, cols))
+    } catch (cause) {
+      skipped.push({
+        title: props.title,
+        reason: cause instanceof Error ? cause.message : String(cause),
+      })
+    }
   }
 
   return {
@@ -539,6 +571,7 @@ export async function inspectSpreadsheet(
     locale: outline.properties?.locale ?? null,
     sheetCount: reports.length,
     sheets: reports,
+    skipped,
     warnings: collectWarnings(reports),
   }
 }
