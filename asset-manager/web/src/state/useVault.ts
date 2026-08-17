@@ -43,7 +43,13 @@ export function useVault(signedIn: boolean): Vault {
     void (async () => {
       const cached = await readCache()
       if (cancelled || !cached) return
-      setData(cached.data)
+      // Normalise, exactly as the Drive path does. A cache written before a
+      // field existed is missing it, and reading it raw put `undefined` where
+      // the code expects an array — the app rendered once from `emptyData()`
+      // and then blanked when this landed.
+      const next = normaliseData(cached.data)
+      dataRef.current = next
+      setData(next)
       setDirty(cached.dirty)
       revisionRef.current = cached.revisionId
       setLastSyncedIso(cached.savedAtIso)
