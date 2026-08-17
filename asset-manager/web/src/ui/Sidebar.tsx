@@ -5,6 +5,7 @@ const NAV: { route: Route; label: string; icon: string; ready: boolean }[] = [
   { route: 'ledger', label: '자산 관리', icon: '▤', ready: false },
   { route: 'portfolio', label: '포트폴리오', icon: '◪', ready: false },
   { route: 'timeline', label: '타임라인', icon: '▥', ready: false },
+  { route: 'import', label: '가져오기', icon: '⤓', ready: true },
   { route: 'inspect', label: '시트 분석', icon: '◎', ready: true },
 ]
 

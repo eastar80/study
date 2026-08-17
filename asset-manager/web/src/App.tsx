@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Sidebar } from './ui/Sidebar'
 import { useRoute, type Route } from './ui/hashRoute'
 import { Card, Muted } from './ui/primitives'
+import { Import } from './routes/Import'
 import { Inspect } from './routes/Inspect'
 import { Settings } from './routes/Settings'
 import { useAuth } from './state/useAuth'
@@ -12,6 +13,7 @@ const TITLES: Record<Route, string> = {
   ledger: '자산 관리',
   portfolio: '포트폴리오',
   timeline: '타임라인',
+  import: '가져오기',
   inspect: '시트 분석',
   settings: '환경 설정',
 }
@@ -57,6 +59,10 @@ export default function App() {
         </header>
 
         <div className="mx-auto w-full max-w-[1200px] p-5 md:p-6">
+          {route === 'import' && (
+            <Import vault={vault} signedIn={auth.signedIn} onConnect={() => void auth.connect()} />
+          )}
+
           {route === 'inspect' && <Inspect signedIn={auth.signedIn} onConnect={() => void auth.connect()} />}
 
           {route === 'settings' && (
