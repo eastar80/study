@@ -1,7 +1,12 @@
 import { useState } from 'react'
 import { hasCredentials } from '../config'
 import { describeUnsupportedFile, pickSpreadsheet, type PickedFile } from '../lib/google/picker'
-import { inspectSpreadsheet } from '../lib/inspect/inspector'
+import {
+  defaultSelection,
+  inspectSpreadsheet,
+  listSheets,
+  type SheetSummary,
+} from '../lib/inspect/inspector'
 import type { InspectionReport, SheetReport } from '../lib/inspect/types'
 import { Alert, Badge, Button, Card, Muted } from '../ui/primitives'
 
@@ -34,6 +39,8 @@ const GROUPING_LABEL: Record<SheetReport['grouping']['verdict'], string> = {
 
 export function Inspect({ signedIn, onConnect }: { signedIn: boolean; onConnect: () => void }) {
   const [file, setFile] = useState<PickedFile | null>(null)
+  const [sheets, setSheets] = useState<SheetSummary[] | null>(null)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
   const [report, setReport] = useState<InspectionReport | null>(null)
   const [progress, setProgress] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -41,9 +48,11 @@ export function Inspect({ signedIn, onConnect }: { signedIn: boolean; onConnect:
 
   const ready = hasCredentials()
 
-  async function run() {
+  /** Step 1 — pick the file and list its sheets. No cell data is read yet. */
+  async function choose() {
     setError(null)
     setReport(null)
+    setSheets(null)
     setCopied(false)
     try {
       const picked = await pickSpreadsheet()
@@ -58,14 +67,41 @@ export function Inspect({ signedIn, onConnect }: { signedIn: boolean; onConnect:
         return
       }
 
+      setProgress('시트 목록을 읽는 중…')
+      const list = await listSheets(picked.id)
+      setSheets(list)
+      setSelected(new Set(defaultSelection(list)))
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setProgress(null)
+    }
+  }
+
+  /** Step 2 — analyse only the checked sheets. */
+  async function analyse() {
+    if (!file || selected.size === 0) return
+    setError(null)
+    setReport(null)
+    setCopied(false)
+    try {
       setProgress('시작하는 중…')
-      const result = await inspectSpreadsheet(picked.id, setProgress)
+      const result = await inspectSpreadsheet(file.id, { titles: [...selected] }, setProgress)
       setReport(result)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
       setProgress(null)
     }
+  }
+
+  function toggle(title: string) {
+    setSelected((current) => {
+      const next = new Set(current)
+      if (next.has(title)) next.delete(title)
+      else next.add(title)
+      return next
+    })
   }
 
   function download() {
@@ -116,8 +152,8 @@ export function Inspect({ signedIn, onConnect }: { signedIn: boolean; onConnect:
 
           {ready && signedIn && (
             <div className="flex flex-wrap items-center gap-3">
-              <Button onClick={run} disabled={progress !== null}>
-                {progress ? '분석 중…' : file ? '다른 시트 분석' : '시트 선택하고 분석'}
+              <Button onClick={choose} disabled={progress !== null}>
+                {file ? '다른 파일 선택' : '파일 선택'}
               </Button>
               {file && <Badge tone="brand">{file.name}</Badge>}
             </div>
@@ -134,6 +170,66 @@ export function Inspect({ signedIn, onConnect }: { signedIn: boolean; onConnect:
           {error && <Alert tone="error">{error}</Alert>}
         </div>
       </Card>
+
+      {sheets && (
+        <Card
+          title={`분석할 시트 선택 (${selected.size}/${sheets.filter((s) => s.analysable).length})`}
+          action={
+            <div className="flex gap-2">
+              <Button
+                variant="ghost"
+                onClick={() => setSelected(new Set(sheets.filter((s) => s.analysable).map((s) => s.title)))}
+              >
+                전체 선택
+              </Button>
+              <Button variant="ghost" onClick={() => setSelected(new Set())}>
+                전체 해제
+              </Button>
+            </div>
+          }
+        >
+          <div className="space-y-4">
+            <Muted>
+              필요한 시트만 골라야 보고서가 짧아지고, 그만큼 대화에 붙여넣기 쉬워집니다. 입력 원본이
+              되는 시트를 고르세요. 조회·집계용 시트는 우리 앱 화면으로 다시 만들 대상이므로 구조
+              참고가 필요할 때만 고르면 됩니다.
+            </Muted>
+
+            <ul className="space-y-1">
+              {sheets.map((sheet) => (
+                <li key={sheet.title}>
+                  <label
+                    className={`flex items-center gap-3 rounded-xl px-3 py-2 text-sm ${
+                      sheet.analysable ? 'cursor-pointer hover:bg-[var(--surface)]' : 'opacity-50'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      className="size-4 shrink-0 accent-brand-600"
+                      checked={selected.has(sheet.title)}
+                      disabled={!sheet.analysable}
+                      onChange={() => toggle(sheet.title)}
+                    />
+                    <span className="min-w-0 flex-1 truncate font-medium">{sheet.title}</span>
+                    {sheet.hidden && <Badge>숨김</Badge>}
+                    {!sheet.analysable && <Badge tone="warn">셀 없음 ({sheet.sheetType})</Badge>}
+                    <span className="tnum shrink-0 text-xs" style={{ color: 'var(--ink-muted)' }}>
+                      {sheet.rowCount}행 × {sheet.columnCount}열
+                    </span>
+                  </label>
+                </li>
+              ))}
+            </ul>
+
+            <div className="flex flex-wrap items-center gap-3">
+              <Button onClick={analyse} disabled={progress !== null || selected.size === 0}>
+                {progress ? '분석 중…' : `선택한 ${selected.size}개 시트 분석`}
+              </Button>
+              {selected.size === 0 && <Muted>시트를 하나 이상 골라 주세요.</Muted>}
+            </div>
+          </div>
+        </Card>
+      )}
 
       {report && (
         <>

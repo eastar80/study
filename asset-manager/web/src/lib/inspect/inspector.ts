@@ -34,8 +34,12 @@ import type {
   SkippedSheet,
 } from './types'
 
-const MAX_ROWS = 400
-const MAX_COLS = 80
+// Ceilings, not fetch sizes: Sheets returns rowData only for rows that hold
+// content and values only up to the last non-empty column, so a generous bound
+// costs nothing on a sparse sheet. 80 columns previously truncated a ledger that
+// runs months across the page.
+const MAX_ROWS = 1000
+const MAX_COLS = 300
 const MAX_SAMPLE_ROWS = 8
 const MAX_TEXT_SAMPLES = 6
 
@@ -510,8 +514,56 @@ function collectWarnings(sheets: SheetReport[]): string[] {
   return warnings
 }
 
+export interface SheetSummary {
+  title: string
+  index: number
+  sheetType: string
+  rowCount: number
+  columnCount: number
+  hidden: boolean
+  /** False for chart-only sheets, which hold no cells and cannot be analysed. */
+  analysable: boolean
+}
+
 /**
- * Reads every sheet in the spreadsheet and builds the report.
+ * Sheet list without any cell data — cheap enough to call before deciding what
+ * to analyse.
+ */
+export async function listSheets(spreadsheetId: string): Promise<SheetSummary[]> {
+  const outline = await getSpreadsheetOutline(spreadsheetId)
+  return (outline.sheets ?? []).map((sheet) => {
+    const props = sheet.properties
+    const sheetType = props.sheetType ?? 'GRID'
+    const rowCount = props.gridProperties?.rowCount ?? 0
+    const columnCount = props.gridProperties?.columnCount ?? 0
+    return {
+      title: props.title,
+      index: props.index,
+      sheetType,
+      rowCount,
+      columnCount,
+      hidden: props.hidden === true,
+      analysable: sheetType === 'GRID' && rowCount > 0 && columnCount > 0,
+    }
+  })
+}
+
+/** Sheet names worth analysing by default, from the workbooks in use. */
+const LIKELY_SOURCE = /잔액|보유현황|기준가|입력정보|포트폴리오/
+
+export function defaultSelection(sheets: SheetSummary[]): string[] {
+  const likely = sheets.filter((s) => s.analysable && LIKELY_SOURCE.test(s.title))
+  // Fall back to everything readable rather than pre-selecting nothing.
+  return (likely.length > 0 ? likely : sheets.filter((s) => s.analysable)).map((s) => s.title)
+}
+
+export interface InspectOptions {
+  /** Analyse only these sheets. Omit for all of them. */
+  titles?: string[]
+}
+
+/**
+ * Reads the requested sheets and builds the report.
  *
  * A single unreadable sheet must not sink the whole run: a real workbook tends
  * to carry chart-only sheets and leftovers alongside the ledger, and the ledger
@@ -519,18 +571,26 @@ function collectWarnings(sheets: SheetReport[]): string[] {
  */
 export async function inspectSpreadsheet(
   spreadsheetId: string,
+  options?: InspectOptions,
   onProgress?: (message: string) => void,
 ): Promise<InspectionReport> {
   onProgress?.('시트 목록을 읽는 중…')
   const outline = await getSpreadsheetOutline(spreadsheetId)
   const sheetProps = (outline.sheets ?? []).map((s) => s.properties)
 
+  const requested = options?.titles ? new Set(options.titles) : null
   const reports: SheetReport[] = []
   const skipped: SkippedSheet[] = []
 
   for (let i = 0; i < sheetProps.length; i++) {
     const props = sheetProps[i]!
-    onProgress?.(`"${props.title}" 구조 분석 중… (${i + 1}/${sheetProps.length})`)
+
+    if (requested && !requested.has(props.title)) {
+      skipped.push({ title: props.title, reason: '분석 대상으로 선택하지 않았습니다.' })
+      continue
+    }
+
+    onProgress?.(`"${props.title}" 구조 분석 중… (${reports.length + 1}/${requested?.size ?? sheetProps.length})`)
 
     // Chart-only sheets ('OBJECT') have no cells at all, so any A1 range is
     // invalid and Sheets answers 400.
@@ -572,6 +632,7 @@ export async function inspectSpreadsheet(
     sheetCount: reports.length,
     sheets: reports,
     skipped,
+    requestedTitles: options?.titles ?? null,
     warnings: collectWarnings(reports),
   }
 }
