@@ -1,0 +1,52 @@
+@import 'tailwindcss';
+
+@theme {
+  --color-brand-50: #eef2ff;
+  --color-brand-100: #e0e7ff;
+  --color-brand-200: #c7d2fe;
+  --color-brand-500: #6366f1;
+  --color-brand-600: #4f46e5;
+  --color-brand-700: #4338ca;
+}
+
+:root {
+  color-scheme: light;
+  --surface: #f6f7fb;
+  --card: #ffffff;
+  --line: #e8eaf0;
+  --ink: #1a1c22;
+  --ink-muted: #6b7280;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --surface: #14161c;
+    --card: #1c1f27;
+    --line: #2b2f3a;
+    --ink: #e9eaee;
+    --ink-muted: #9aa1af;
+  }
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--surface);
+  color: var(--ink);
+  font-family:
+    'Pretendard', -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Malgun Gothic',
+    system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Numeric columns line up only with tabular figures. */
+.tnum {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum';
+}
