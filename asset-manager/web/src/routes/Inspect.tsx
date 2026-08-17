@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { hasCredentials } from '../config'
-import { pickSpreadsheet, type PickedFile } from '../lib/google/picker'
+import { describeUnsupportedFile, pickSpreadsheet, type PickedFile } from '../lib/google/picker'
 import { inspectSpreadsheet } from '../lib/inspect/inspector'
 import type { InspectionReport, SheetReport } from '../lib/inspect/types'
 import { Alert, Badge, Button, Card, Muted } from '../ui/primitives'
@@ -49,6 +49,15 @@ export function Inspect({ signedIn, onConnect }: { signedIn: boolean; onConnect:
       const picked = await pickSpreadsheet()
       if (!picked) return
       setFile(picked)
+
+      // Reject Excel/CSV up front — Sheets would answer 404 and the reason
+      // would be indistinguishable from a permissions problem.
+      const unsupported = describeUnsupportedFile(picked)
+      if (unsupported) {
+        setError(unsupported)
+        return
+      }
+
       setProgress('시작하는 중…')
       const result = await inspectSpreadsheet(picked.id, setProgress)
       setReport(result)
@@ -112,6 +121,13 @@ export function Inspect({ signedIn, onConnect }: { signedIn: boolean; onConnect:
               </Button>
               {file && <Badge tone="brand">{file.name}</Badge>}
             </div>
+          )}
+
+          {/* The file type is what distinguishes the two causes of a 404, so show it. */}
+          {file && (
+            <p className="font-mono text-xs" style={{ color: 'var(--ink-muted)' }}>
+              형식: {file.mimeType}
+            </p>
           )}
 
           {progress && <Muted>{progress}</Muted>}
