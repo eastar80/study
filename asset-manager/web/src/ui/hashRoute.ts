@@ -11,13 +11,15 @@ export const ROUTES = [
   'ledger',
   'portfolio',
   'timeline',
+  'import',
   'inspect',
   'settings',
 ] as const
 
 export type Route = (typeof ROUTES)[number]
 
-export const DEFAULT_ROUTE: Route = 'inspect'
+/** Importing the existing workbook is the next thing to do, so land there. */
+export const DEFAULT_ROUTE: Route = 'import'
 
 function parse(hash: string): Route {
   const name = hash.replace(/^#\/?/, '').split('/')[0] ?? ''

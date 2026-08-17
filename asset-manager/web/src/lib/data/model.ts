@@ -37,6 +37,18 @@ export interface Item {
   currency: CurrencyCode
   hidden: boolean
   order: number
+  /**
+   * Middle tier of the source classification (중분류), between the category and
+   * the item — e.g. 현금성자산 > 수시입출 > 국민은행 보통예금. Kept so groupings
+   * finer than the category stay possible; the ledger grid still groups by
+   * category.
+   */
+  subCategory?: string
+  /**
+   * Column letter in the source spreadsheet ('B', 'AI'). Lets a re-import
+   * recognise the same item after it has been renamed here.
+   */
+  sourceKey?: string
   /** Loans carry an interest rate on each monthly snapshot. */
   isLoan?: boolean
 }
