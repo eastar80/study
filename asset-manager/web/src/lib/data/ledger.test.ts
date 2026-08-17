@@ -84,6 +84,40 @@ describe('buildLedger', () => {
     expect(at(rows, 'total-asset', 1)).toBe(1500)
   })
 
+  describe('a 마통 month that held money instead of owing it', () => {
+    /** 마통 stored positive: the account was in credit by 400 that month. */
+    function inCredit(): AssetData {
+      const base = data()
+      return {
+        ...base,
+        snapshots: base.snapshots.map((snapshot) =>
+          snapshot.itemId === 'i3' && snapshot.ym === '2026-01' ? { ...snapshot, amount: 400 } : snapshot,
+        ),
+      }
+    }
+
+    it('shows the item negative rather than as money owed', () => {
+      expect(at(buildLedger(inCredit(), 2026), 'i3', 1)).toBe(-400)
+    })
+
+    it('carries the negative into its category subtotal', () => {
+      expect(at(buildLedger(inCredit(), 2026), 's-c2', 1)).toBe(-400)
+    })
+
+    it('deducts it from the debt total', () => {
+      // 주택담보대출 2000 less the 400 sitting in the 마통 account.
+      expect(at(buildLedger(inCredit(), 2026), 'total-debt', 1)).toBe(1600)
+    })
+
+    it('raises net worth by that amount, and leaves assets alone', () => {
+      const rows = buildLedger(inCredit(), 2026)
+      expect(at(rows, 'total-asset', 1)).toBe(1500)
+      expect(at(rows, 'total-net', 1)).toBe(1500 - 1600)
+      // 400 better off than the month where the same account owed 300.
+      expect(at(rows, 'total-net', 1)! - at(buildLedger(data(), 2026), 'total-net', 1)!).toBe(700)
+    })
+  })
+
   it('computes net worth as assets minus debts', () => {
     const rows = buildLedger(data(), 2026)
     expect(at(rows, 'total-net', 1)).toBe(1500 - 2300)
@@ -188,10 +222,18 @@ describe('setCell', () => {
     expect(next).toEqual([{ itemId: 'i1', ym: '2026-03', amount: 700 }])
   })
 
-  it('stores a debt negative however it was entered', () => {
+  it('stores a debt with the sign flipped', () => {
     expect(setCell([], debt, true, '2026-03', 500, null)[0]!.amount).toBe(-500)
-    // A user typing the minus sign must not double-negate into a positive.
-    expect(setCell([], debt, true, '2026-03', -500, null)[0]!.amount).toBe(-500)
+  })
+
+  it('takes a typed minus on a debt as an account holding money', () => {
+    // Not a slip to forgive: 마통 swings sign, so −500 means the account held
+    // 500 that month. It stores positive and reads back negative.
+    const stored = setCell([], debt, true, '2026-03', -500, null)
+    expect(stored[0]!.amount).toBe(500)
+
+    const roundTrip = buildLedger({ ...data(), snapshots: stored }, 2026)
+    expect(at(roundTrip, 'i4', 3)).toBe(-500)
   })
 
   it('replaces the existing record for that item and month only', () => {

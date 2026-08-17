@@ -295,12 +295,19 @@ export function parseBalanceSheet(
 export interface ParsedHoldings {
   /** Cells an adjustment rule changed. */
   adjustedCells: number
+  /**
+   * L~S cells that were negative in the sheet, read as the account holding money
+   * rather than owing it. Reported so that reading is never silent.
+   */
+  creditCells: number
   /** Debt items from L~S. */
   items: Omit<Item, 'id' | 'categoryId' | 'order'>[]
   /** Snapshots keyed by the item's sourceKey, since ids are assigned by the caller. */
   snapshotsBySourceKey: Map<string, { ym: YearMonth; amount: number; memo?: string }[]>
   notes: MonthlyNote[]
   expectedTotals: ExpectedTotals
+  /** Our own L~S monthly sums, in stored sign, for the debt cross-check. */
+  ownDebtTotals: Map<YearMonth, number>
 }
 
 export function parseHoldingsSheet(
@@ -325,7 +332,10 @@ export function parseHoldingsSheet(
   const notes: MonthlyNote[] = []
   const byCategory = new Map<string, Map<YearMonth, number>>()
   const debtTotals = new Map<YearMonth, number>()
+  /** Our own L~S sum per month, to compare against the sheet's T column. */
+  const debtSums = new Map<YearMonth, number>()
   let adjustedCells = 0
+  let creditCells = 0
 
   for (let r = 1; r < rows.length; r++) {
     const found = rowYm(rows, r)
@@ -339,13 +349,18 @@ export function parseHoldingsSheet(
       const key = columnLetter(c)
       const list = snapshotsBySourceKey.get(key) ?? []
       const memo = noteAt(rows, r, c)
-      // The sheet writes debts as positive; the model stores them negative so
-      // sums and composition need no branching. The correction is applied to the
-      // stored (negative) value so its sign means the same thing everywhere.
+      // The sheet writes debts as positive; the model stores them with the
+      // opposite sign so sums and composition need no branching. Negating rather
+      // than clamping means a negative cell — an account holding money instead
+      // of owing it — survives. Every observed L~S value is positive, so this is
+      // identical to a clamp on the real data and only differs where a clamp
+      // would be wrong.
+      if (raw < 0) creditCells++
       const delta = deltaFor(adjustments, 'HOLDINGS', key, ym)
       if (delta !== 0) adjustedCells++
-      list.push({ ym, amount: -Math.abs(raw) + delta, ...(memo ? { memo } : {}) })
+      list.push({ ym, amount: -raw + delta, ...(memo ? { memo } : {}) })
       snapshotsBySourceKey.set(key, list)
+      debtSums.set(ym, (debtSums.get(ym) ?? 0) + (-raw + delta))
     }
 
     for (const [c, name] of assetTotalNames) {
@@ -379,8 +394,45 @@ export function parseHoldingsSheet(
     snapshotsBySourceKey,
     notes,
     expectedTotals: { byCategory, debt: debtTotals },
+    ownDebtTotals: debtSums,
     adjustedCells,
+    creditCells,
   }
+}
+
+export interface DebtMismatch {
+  ym: YearMonth
+  /** Our L~S sum, as a positive amount owed. */
+  ours: number
+  /** The sheet's T column. */
+  sheet: number
+  diff: number
+}
+
+/**
+ * Compares our L~S sum against the sheet's own 부채 total (column T).
+ *
+ * Until now nothing verified the debt numbers at all: `crossCheck` only walks
+ * the asset categories in B~H, and 마통 is not among them. So a sign error in a
+ * debt column had nothing to catch it.
+ *
+ * 마통 lives in 잔액입력, not in L~S, so it is deliberately excluded here —
+ * including it would compare two different populations.
+ */
+export function crossCheckDebt(
+  ours: Map<YearMonth, number>,
+  expected: Map<YearMonth, number>,
+  tolerance = 1,
+): DebtMismatch[] {
+  const mismatches: DebtMismatch[] = []
+  for (const [ym, sheetValue] of expected) {
+    // Ours is stored negative; the sheet writes the total positive.
+    const ourValue = -(ours.get(ym) ?? 0)
+    const diff = ourValue - sheetValue
+    if (Math.abs(diff) > tolerance) mismatches.push({ ym, ours: ourValue, sheet: sheetValue, diff })
+  }
+  mismatches.sort((a, b) => a.ym.localeCompare(b.ym))
+  return mismatches
 }
 
 export interface Mismatch {

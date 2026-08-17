@@ -1,13 +1,31 @@
 /**
  * Turns the stored data into the rows the ledger grid draws.
  *
- * The sign convention lives here and nowhere else: debts are stored negative so
- * sums need no branching, and this module flips them to positive for display.
- * If that conversion leaked into the UI, some screens would show debts negative
- * and others positive, and nothing would look obviously wrong.
+ * The sign convention lives here and nowhere else: debts are stored with the
+ * opposite sign to how they are shown, so sums need no branching. `display =
+ * −stored`. If that conversion leaked into the UI, some screens would show debts
+ * negative and others positive, and nothing would look obviously wrong.
+ *
+ * It is a negation, not an absolute value. 마통 (an overdraft account) can hold
+ * money rather than owe it, and in those months the debt is genuinely negative —
+ * clamping the sign would report a credit balance as money owed.
  */
 
 import type { AssetData, Category, Item, Snapshot, YearMonth } from './model'
+
+/**
+ * The stored-to-display conversion, in one place. Every screen that shows an
+ * amount goes through this, so no two screens can disagree about which way a
+ * debt points.
+ */
+export function displayAmount(amount: number, isDebt: boolean): number {
+  return isDebt ? -amount : amount
+}
+
+/** The inverse, for turning something the user typed back into storage. */
+export function storedAmount(value: number, isDebt: boolean): number {
+  return isDebt ? -value : value
+}
 
 export function monthsOfYear(year: number): YearMonth[] {
   return Array.from({ length: 12 }, (_, index) => `${year}-${String(index + 1).padStart(2, '0')}`)
@@ -42,7 +60,11 @@ export function indexSnapshots(snapshots: Snapshot[]): SnapshotIndex {
 
 export interface Cell {
   ym: YearMonth
-  /** Display value: positive for both assets and debts. Null means no record. */
+  /**
+   * Display value. Null means no record. Debts normally show positive; a
+   * negative debt means that account held money instead of owing it, and it
+   * counts against the debt total.
+   */
   value: number | null
   memo: string | null
   /** Annual interest rate, loans only. */
@@ -123,8 +145,7 @@ export function buildLedger(data: AssetData, year: number, options: BuildOptions
         if (!snapshot) return { ym, value: null, memo: null, rate: null }
         return {
           ym,
-          // Debts are stored negative; show them positive.
-          value: isDebt ? Math.abs(snapshot.amount) : snapshot.amount,
+          value: displayAmount(snapshot.amount, isDebt),
           memo: snapshot.memo ?? null,
           rate: snapshot.rate ?? null,
         }
@@ -217,6 +238,11 @@ export function buildLedger(data: AssetData, year: number, options: BuildOptions
  * `value` arrives in display sign; the stored sign is restored here so the
  * convention stays in one place. A blank value removes the record rather than
  * storing zero.
+ *
+ * A typed minus on a debt is taken at face value — it records an account that
+ * held money that month. This used to be forgiven as a slip, which is not
+ * compatible with 마통 swinging sign. A mistyped minus now shows as a negative
+ * cell rather than being silently absorbed.
  */
 export function setCell(
   snapshots: Snapshot[],
@@ -229,6 +255,6 @@ export function setCell(
   const rest = snapshots.filter((snapshot) => !(snapshot.itemId === item.id && snapshot.ym === ym))
   if (value === null) return rest
 
-  const stored = isDebt ? -Math.abs(value) : value
+  const stored = storedAmount(value, isDebt)
   return [...rest, { itemId: item.id, ym, amount: stored, ...(memo ? { memo } : {}) }]
 }
