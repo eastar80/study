@@ -17,7 +17,8 @@
 import type { CellData, Sheet } from '../google/sheets'
 import { columnLetter } from '../google/sheets'
 import { parseMonthToken } from '../inspect/patterns'
-import type { Category, Item, MonthlyNote, Snapshot, YearMonth } from '../data/model'
+import type { Category, ImportAdjustment, Item, MonthlyNote, Snapshot, YearMonth } from '../data/model'
+import { deltaFor } from './adjustments'
 
 /**
  * Row indices (0-based) of the header rows in 잔액입력.
@@ -86,6 +87,8 @@ export interface ParsedBalances {
   unclassifiedColumns: string[]
   /** Our own per-category monthly sums, to compare against the sheet's totals. */
   ownTotals: Map<string, Map<YearMonth, number>>
+  /** Cells an adjustment rule changed — surfaced so corrections are never silent. */
+  adjustedCells: number
   firstYm: YearMonth | null
   lastYm: YearMonth | null
 }
@@ -162,7 +165,10 @@ function baseName(def: ColumnDef): string {
   return parts.length > 0 ? parts.join(' ') : def.sourceKey
 }
 
-export function parseBalanceSheet(sheet: Sheet): ParsedBalances {
+export function parseBalanceSheet(
+  sheet: Sheet,
+  adjustments: readonly ImportAdjustment[] = [],
+): ParsedBalances {
   const rows = grid(sheet)
   const defs = readColumnDefs(rows)
 
@@ -241,14 +247,21 @@ export function parseBalanceSheet(sheet: Sheet): ParsedBalances {
 
   const snapshots: Snapshot[] = []
   const byCategory = new Map<string, Map<YearMonth, number>>()
+  let adjustedCells = 0
 
   for (const [ym, { row }] of rowByYm) {
     for (const def of defs) {
       const itemId = itemIdByColumn.get(def.index)
       if (!itemId) continue
 
-      const amount = numberAt(rows, row, def.index)
-      if (amount === null) continue
+      const raw = numberAt(rows, row, def.index)
+      if (raw === null) continue
+
+      // Corrections are applied before anything else sees the value, so the
+      // cross-check compares corrected sums against the sheet's own totals.
+      const delta = deltaFor(adjustments, 'BALANCE', def.sourceKey, ym)
+      if (delta !== 0) adjustedCells++
+      const amount = raw + delta
 
       const memo = noteAt(rows, row, def.index)
       snapshots.push({ itemId, ym, amount, ...(memo ? { memo } : {}) })
@@ -273,12 +286,15 @@ export function parseBalanceSheet(sheet: Sheet): ParsedBalances {
     renamedItems,
     unclassifiedColumns,
     ownTotals: byCategory,
+    adjustedCells,
     firstYm: sortedYms[0] ?? null,
     lastYm: sortedYms[sortedYms.length - 1] ?? null,
   }
 }
 
 export interface ParsedHoldings {
+  /** Cells an adjustment rule changed. */
+  adjustedCells: number
   /** Debt items from L~S. */
   items: Omit<Item, 'id' | 'categoryId' | 'order'>[]
   /** Snapshots keyed by the item's sourceKey, since ids are assigned by the caller. */
@@ -287,7 +303,10 @@ export interface ParsedHoldings {
   expectedTotals: ExpectedTotals
 }
 
-export function parseHoldingsSheet(sheet: Sheet): ParsedHoldings {
+export function parseHoldingsSheet(
+  sheet: Sheet,
+  adjustments: readonly ImportAdjustment[] = [],
+): ParsedHoldings {
   const rows = grid(sheet)
 
   const debtNames = new Map<number, string>()
@@ -306,6 +325,7 @@ export function parseHoldingsSheet(sheet: Sheet): ParsedHoldings {
   const notes: MonthlyNote[] = []
   const byCategory = new Map<string, Map<YearMonth, number>>()
   const debtTotals = new Map<YearMonth, number>()
+  let adjustedCells = 0
 
   for (let r = 1; r < rows.length; r++) {
     const found = rowYm(rows, r)
@@ -313,15 +333,18 @@ export function parseHoldingsSheet(sheet: Sheet): ParsedHoldings {
     const { ym } = found
 
     for (const c of debtNames.keys()) {
-      const amount = numberAt(rows, r, c)
-      if (amount === null) continue
+      const raw = numberAt(rows, r, c)
+      if (raw === null) continue
 
       const key = columnLetter(c)
       const list = snapshotsBySourceKey.get(key) ?? []
       const memo = noteAt(rows, r, c)
       // The sheet writes debts as positive; the model stores them negative so
-      // sums and composition need no branching.
-      list.push({ ym, amount: -Math.abs(amount), ...(memo ? { memo } : {}) })
+      // sums and composition need no branching. The correction is applied to the
+      // stored (negative) value so its sign means the same thing everywhere.
+      const delta = deltaFor(adjustments, 'HOLDINGS', key, ym)
+      if (delta !== 0) adjustedCells++
+      list.push({ ym, amount: -Math.abs(raw) + delta, ...(memo ? { memo } : {}) })
       snapshotsBySourceKey.set(key, list)
     }
 
@@ -356,6 +379,7 @@ export function parseHoldingsSheet(sheet: Sheet): ParsedHoldings {
     snapshotsBySourceKey,
     notes,
     expectedTotals: { byCategory, debt: debtTotals },
+    adjustedCells,
   }
 }
 

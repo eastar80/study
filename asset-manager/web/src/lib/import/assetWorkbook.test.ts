@@ -236,6 +236,71 @@ describe('crossCheck', () => {
   })
 })
 
+describe('adjustments during parsing', () => {
+  it('subtracts the correction from the target column only', () => {
+    const { snapshots, adjustedCells } = parseBalanceSheet(balanceSheet(), [
+      { sourceKey: 'B', sheet: 'BALANCE', delta: -100, reason: 'test' },
+    ])
+    // 국민은행 보통예금 is column B.
+    expect(snapshots.find((s) => s.itemId === 'i1' && s.ym === '2010-01')?.amount).toBe(1100 - 100)
+    // Its neighbours are untouched: C (국민은행 청약예금) and E (우체국 예금).
+    expect(snapshots.find((s) => s.itemId === 'i2' && s.ym === '2010-01')?.amount).toBe(2100)
+    expect(snapshots.find((s) => s.itemId === 'i4' && s.ym === '2010-01')?.amount).toBe(300)
+    // Two months survive after the duplicate January row is dropped.
+    expect(adjustedCells).toBe(2)
+  })
+
+  it('respects the month range and counts only the cells it changed', () => {
+    const { snapshots, adjustedCells } = parseBalanceSheet(balanceSheet(), [
+      { sourceKey: 'B', sheet: 'BALANCE', fromYm: '2010-02', delta: -100, reason: 'test' },
+    ])
+    expect(snapshots.find((s) => s.itemId === 'i1' && s.ym === '2010-01')?.amount).toBe(1100)
+    expect(snapshots.find((s) => s.itemId === 'i1' && s.ym === '2010-02')?.amount).toBe(1200 - 100)
+    expect(adjustedCells).toBe(1)
+  })
+
+  it('makes the cross-check pass once the correction is registered', () => {
+    // Reproduce the real workbook's shape: the sheet's own 예적금 total excludes a
+    // worthless holding that the detail sheet still carries, so our detail sum is
+    // too high by the same amount in every month.
+    // 예적금 = C (국민은행 청약예금) + E (우체국 예금).
+    const holdings = parseHoldingsSheet(holdingsSheet())
+    const deposits = holdings.expectedTotals.byCategory.get('예적금')!
+    deposits.set('2010-01', 2100 + 300 - 100)
+    deposits.set('2010-02', 2200 + 300 - 100)
+
+    const before = crossCheck(parseBalanceSheet(balanceSheet()).ownTotals, holdings.expectedTotals)
+    expect(before.mismatches).toHaveLength(2)
+    expect(before.mismatches.every((m) => m.diff === 100)).toBe(true)
+
+    // 예적금 comes from columns C (국민은행 청약예금) and E (우체국 예금); correct C.
+    const adjusted = parseBalanceSheet(balanceSheet(), [
+      { sourceKey: 'C', sheet: 'BALANCE', delta: -100, reason: '무가치 자산' },
+    ])
+    const after = crossCheck(adjusted.ownTotals, holdings.expectedTotals)
+    expect(after.mismatches).toEqual([])
+  })
+
+  it('applies a holdings correction to the stored negative debt', () => {
+    const { snapshotsBySourceKey, adjustedCells } = parseHoldingsSheet(holdingsSheet(), [
+      { sourceKey: 'L', sheet: 'HOLDINGS', fromYm: '2010-02', delta: 400, reason: 'test' },
+    ])
+    // Stored negative, so a positive delta shrinks the debt.
+    expect(snapshotsBySourceKey.get('L')).toEqual([
+      { ym: '2010-01', amount: -5000 },
+      { ym: '2010-02', amount: -4900 + 400 },
+    ])
+    expect(adjustedCells).toBe(1)
+  })
+
+  it('does nothing when no rules are given', () => {
+    const plain = parseBalanceSheet(balanceSheet())
+    const empty = parseBalanceSheet(balanceSheet(), [])
+    expect(empty.snapshots).toEqual(plain.snapshots)
+    expect(empty.adjustedCells).toBe(0)
+  })
+})
+
 describe('combine', () => {
   it('gives debt items ids and folds their snapshots in', () => {
     const balances = parseBalanceSheet(balanceSheet())
