@@ -5,6 +5,7 @@ import { getSheetGrid, getSpreadsheetOutline, type Sheet } from '../lib/google/s
 import {
   combine,
   crossCheck,
+  crossCheckDebt,
   parseBalanceSheet,
   parseHoldingsSheet,
   type Mismatch,
@@ -57,6 +58,7 @@ export function Import({ vault, signedIn, onConnect }: { vault: Vault; signedIn:
       holdings,
       merged: combine(balances, holdings),
       check: crossCheck(balances.ownTotals, holdings.expectedTotals),
+      debtCheck: crossCheckDebt(holdings.ownDebtTotals, holdings.expectedTotals.debt),
     }
   }, [sheets, adjustments])
 
@@ -256,6 +258,31 @@ export function Import({ vault, signedIn, onConnect }: { vault: Vault; signedIn:
                 <Alert tone="warn">
                   {HOLDINGS_SHEET} 의 다음 분류를 {BALANCE_SHEET} 에서 찾지 못해 대조하지 못했습니다:{' '}
                   <strong>{preview.check.unmatchedSheetCategories.join(', ')}</strong>
+                </Alert>
+              )}
+
+              {/* B~H covers assets only, and 마통 is not among them, so the debt
+                  columns had no verification at all until this. */}
+              <div className="space-y-2">
+                <SectionTitle>부채 합계 (T열)</SectionTitle>
+                {preview.debtCheck.length === 0 ? (
+                  <Muted>L~S를 더한 값이 모든 달에서 T열과 일치합니다.</Muted>
+                ) : (
+                  <Alert tone="warn">
+                    L~S를 더한 값이 T열과 <strong>{preview.debtCheck.length}개월</strong> 다릅니다. 첫 달{' '}
+                    {preview.debtCheck[0]!.ym}: 제 합계 {won.format(Math.round(preview.debtCheck[0]!.ours))}원 ·
+                    시트 {won.format(Math.round(preview.debtCheck[0]!.sheet))}원. 마통은 {BALANCE_SHEET} 소속이라
+                    이 비교에서 제외했는데, T열이 마통을 포함한다면 그 차이일 수 있습니다.{' '}
+                    <strong>가져오기를 막지는 않습니다.</strong>
+                  </Alert>
+                )}
+              </div>
+
+              {preview.holdings.creditCells > 0 && (
+                <Alert tone="info">
+                  부채 컬럼에 음수가 <strong>{preview.holdings.creditCells}개</strong> 있어, 그 달에는 해당
+                  계좌가 빚이 아니라 <strong>돈을 들고 있었다</strong>고 읽었습니다. 대장에서 음수로 표시되고
+                  부채 합계에서 차감됩니다.
                 </Alert>
               )}
 

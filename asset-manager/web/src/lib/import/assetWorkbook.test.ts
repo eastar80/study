@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Sheet } from '../google/sheets'
-import { combine, crossCheck, parseBalanceSheet, parseHoldingsSheet } from './assetWorkbook'
+import { combine, crossCheck, crossCheckDebt, parseBalanceSheet, parseHoldingsSheet } from './assetWorkbook'
 
 /**
  * Builds a sheet from a grid of plain values. A cell may be a string (rendered
@@ -196,6 +196,51 @@ describe('parseHoldingsSheet', () => {
   it('turns the X column into a monthly note', () => {
     const { notes } = parseHoldingsSheet(holdingsSheet())
     expect(notes).toEqual([{ module: 'ASSET', ym: '2010-01', status: 'DONE', body: '결혼, 부동산매입' }])
+  })
+
+  it('reports no credit cells when every debt is money owed', () => {
+    expect(parseHoldingsSheet(holdingsSheet()).creditCells).toBe(0)
+  })
+
+  it('reads a negative debt cell as an account holding money, and says so', () => {
+    // Clamping the sign here would report a credit balance as money owed.
+    const negative = sheetOf([
+      ['날짜', ...Array<Cell>(10).fill(null), '주택담보대출'],
+      ['2010-01-31', ...Array<Cell>(10).fill(null), -800],
+    ])
+    const { snapshotsBySourceKey, creditCells } = parseHoldingsSheet(negative)
+
+    // Stored positive, so the ledger shows it negative and deducts it.
+    expect(snapshotsBySourceKey.get('L')).toEqual([{ ym: '2010-01', amount: 800 }])
+    expect(creditCells).toBe(1)
+  })
+})
+
+describe('crossCheckDebt', () => {
+  it('passes when our L~S sum matches the sheet 부채 column', () => {
+    const holdings = parseHoldingsSheet(holdingsSheet())
+    // 5000 + 300 = 5300, 4900 + 200 = 5100, matching column T.
+    expect(crossCheckDebt(holdings.ownDebtTotals, holdings.expectedTotals.debt)).toEqual([])
+  })
+
+  it('reports a month where the debt columns do not add up to the total', () => {
+    const holdings = parseHoldingsSheet(holdingsSheet())
+    const tampered = new Map(holdings.expectedTotals.debt)
+    tampered.set('2010-02', 6000)
+
+    const mismatches = crossCheckDebt(holdings.ownDebtTotals, tampered)
+    expect(mismatches).toEqual([{ ym: '2010-02', ours: 5100, sheet: 6000, diff: -900 }])
+  })
+
+  it('compares in the positive sign the sheet writes, not the stored sign', () => {
+    // Our sums are negative; a naive comparison would double every month.
+    const ours = new Map([['2010-01', -5300]])
+    const sheet = new Map([['2010-01', 5300]])
+    expect(crossCheckDebt(ours, sheet)).toEqual([])
+  })
+
+  it('tolerates rounding of a won or less', () => {
+    expect(crossCheckDebt(new Map([['2010-01', -5300.4]]), new Map([['2010-01', 5300]]))).toEqual([])
   })
 })
 

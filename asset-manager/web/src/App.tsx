@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Sidebar } from './ui/Sidebar'
 import { useRoute, type Route } from './ui/hashRoute'
 import { Card, Muted } from './ui/primitives'
+import { Dashboard } from './routes/Dashboard'
 import { Import } from './routes/Import'
 import { Ledger } from './routes/Ledger'
 import { Inspect } from './routes/Inspect'
@@ -20,7 +21,6 @@ const TITLES: Record<Route, string> = {
 }
 
 const PENDING: Partial<Record<Route, string>> = {
-  dashboard: '자산 대장이 채워진 다음 단계에서 만듭니다. 순자산·총자산·총부채·레버리지 비율 KPI, 자산·부채 구성비, 통화별 자산 현황, 부채 상세, 12개월 추이 차트가 들어갑니다.',
   portfolio: '자산 대장과 대시보드를 실제로 써 본 뒤에 만듭니다. 시세·환율 중계용 프록시가 함께 필요합니다.',
   timeline: '마지막 단계에서 만듭니다.',
 }
@@ -59,6 +59,8 @@ export default function App() {
         </header>
 
         <div className="mx-auto w-full max-w-[1200px] p-5 md:p-6">
+          {route === 'dashboard' && <Dashboard vault={vault} onGoToImport={() => navigate('import')} />}
+
           {route === 'ledger' && <Ledger vault={vault} />}
 
           {route === 'import' && (

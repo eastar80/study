@@ -56,6 +56,44 @@ export function formatChange(value: number | null, options: AmountOptions = {}):
   return `${value > 0 ? '+' : '−'}${text}`
 }
 
+/**
+ * Compact won for headline figures: `6.8억`, `3,450만`, `-1.2억`.
+ *
+ * At the scale this ledger holds, a nine-digit figure is unreadable as a
+ * headline. 억/만 is how the amount would be said out loud, so it is what the
+ * KPI cards show — with the exact figure beside it, never instead of it.
+ */
+export function formatCompactWon(value: number | null, options: AmountOptions = {}): string {
+  if (value === null) return ''
+  if (options.mask) return '****'
+
+  const sign = value < 0 ? '−' : ''
+  const abs = Math.abs(value)
+
+  if (abs >= 100_000_000) {
+    const 억 = abs / 100_000_000
+    // One decimal up to 100억, none beyond — "1,234.5억" is noise.
+    const digits = 억 >= 100 ? 0 : 1
+    return `${sign}${new Intl.NumberFormat('ko-KR', { maximumFractionDigits: digits }).format(억)}억`
+  }
+  if (abs >= 10_000) {
+    return `${sign}${new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 0 }).format(abs / 10_000)}만`
+  }
+  return `${sign}${new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 0 }).format(abs)}`
+}
+
+/** An unsigned share of a whole, from a 0–1 fraction. */
+export function formatShare(fraction: number): string {
+  return `${new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 1 }).format(fraction * 100)}%`
+}
+
+/** Signed percent for a KPI delta. Null renders empty, not `0%`. */
+export function formatPercent(value: number | null, digits = 1): string {
+  if (value === null) return ''
+  const sign = value > 0 ? '+' : value < 0 ? '−' : ''
+  return `${sign}${new Intl.NumberFormat('ko-KR', { maximumFractionDigits: digits }).format(Math.abs(value))}%`
+}
+
 export function formatRate(rate: number | null): string {
   if (rate === null) return ''
   return `${new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 2 }).format(rate)}%`
