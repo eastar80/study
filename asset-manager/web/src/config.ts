@@ -42,6 +42,17 @@ export function getApiKey(): string {
   )
 }
 
+/**
+ * Cloud project number, needed by the Picker so the file grant it creates is
+ * attached to this app. It is the leading digit group of the OAuth client ID
+ * (`123456789012-xxxxx.apps.googleusercontent.com`), so there is nothing extra
+ * for the user to look up. Returns '' when the client ID is not in that shape.
+ */
+export function getProjectNumber(clientId: string = getClientId()): string {
+  const match = /^(\d+)-/.exec(clientId.trim())
+  return match ? match[1]! : ''
+}
+
 export function setCredentials(clientId: string, apiKey: string): void {
   localStorage.setItem(LS_CLIENT_ID, clientId.trim())
   localStorage.setItem(LS_API_KEY, apiKey.trim())
@@ -68,6 +79,9 @@ export function describeCredentialProblem(clientId: string, apiKey: string): str
   }
   if (!apiKey.startsWith('AIza')) {
     return 'API 키는 보통 "AIza" 로 시작합니다. 값을 다시 확인하세요.'
+  }
+  if (!getProjectNumber(clientId)) {
+    return '클라이언트 ID 앞부분에서 프로젝트 번호(숫자)를 찾을 수 없습니다. 값이 잘렸는지 확인하세요.'
   }
   return null
 }

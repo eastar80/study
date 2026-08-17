@@ -41,6 +41,7 @@ interface GoogleNamespace {
   picker?: GooglePickerNamespace
 }
 
+// eslint-disable-next-line @typescript-eslint/no-empty-interface
 interface Window {
   google?: GoogleNamespace
   gapi?: { load(name: string, callback: () => void): void }
