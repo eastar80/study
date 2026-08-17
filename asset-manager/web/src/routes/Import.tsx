@@ -6,6 +6,7 @@ import {
   combine,
   crossCheck,
   crossCheckDebt,
+  crossCheckNetWorth,
   parseBalanceSheet,
   parseHoldingsSheet,
   type Mismatch,
@@ -53,12 +54,15 @@ export function Import({ vault, signedIn, onConnect }: { vault: Vault; signedIn:
     if (!sheets) return null
     const balances = parseBalanceSheet(sheets.balance, adjustments)
     const holdings = parseHoldingsSheet(sheets.holdings, adjustments)
+    const merged = combine(balances, holdings)
     return {
       balances,
       holdings,
-      merged: combine(balances, holdings),
+      merged,
       check: crossCheck(balances.ownTotals, holdings.expectedTotals),
       debtCheck: crossCheckDebt(holdings.ownDebtTotals, holdings.expectedTotals.debt),
+      netCheck: crossCheckNetWorth(merged, holdings.expectedTotals),
+      excludedItems: merged.items.filter((item) => item.countedElsewhere),
     }
   }, [sheets, adjustments])
 
@@ -277,6 +281,44 @@ export function Import({ vault, signedIn, onConnect }: { vault: Vault; signedIn:
                   </Alert>
                 )}
               </div>
+
+              {/* The only check that sees a value counted twice across the two
+                  sheets — each of the others verifies its own slice. */}
+              <div className="space-y-2">
+                <SectionTitle>순자산 (J열)</SectionTitle>
+                {preview.netCheck.length === 0 ? (
+                  <Muted>
+                    가져올 데이터로 계산한 순자산이 모든 달에서 J열과 일치합니다. 자산·부채·중복까지
+                    한 번에 맞는다는 뜻입니다.
+                  </Muted>
+                ) : (
+                  <Alert tone="warn">
+                    계산한 순자산이 J열과 <strong>{preview.netCheck.length}개월</strong> 다릅니다. 첫 달{' '}
+                    {preview.netCheck[0]!.ym}: 제 순자산{' '}
+                    {won.format(Math.round(preview.netCheck[0]!.ourNet))}원 · 시트{' '}
+                    {won.format(Math.round(preview.netCheck[0]!.sheetNet))}원 (차이{' '}
+                    {won.format(Math.round(preview.netCheck[0]!.diff))}원).
+                    {Math.abs(preview.netCheck[0]!.ourAsset - preview.netCheck[0]!.sheetAsset) <= 1
+                      ? ' 자산은 일치하므로 부채 쪽입니다 — 두 시트에 겹쳐 들어간 항목이 더 있을 수 있습니다.'
+                      : ' 자산도 어긋나므로 분류 매핑부터 확인해야 합니다.'}{' '}
+                    <strong>가져오기를 막지는 않습니다.</strong>
+                  </Alert>
+                )}
+              </div>
+
+              {preview.excludedItems.length > 0 && (
+                <Alert tone="info">
+                  다음 항목은 다른 항목에 이미 포함되어 있어 <strong>합계에 넣지 않습니다.</strong> 대장에는
+                  그대로 보입니다.
+                  <ul className="mt-1.5 space-y-0.5">
+                    {preview.excludedItems.map((item) => (
+                      <li key={item.id}>
+                        <strong>{item.name}</strong> — {item.countedElsewhere}
+                      </li>
+                    ))}
+                  </ul>
+                </Alert>
+              )}
 
               {preview.holdings.creditCells > 0 && (
                 <Alert tone="info">

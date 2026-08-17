@@ -177,6 +177,32 @@ export function Dashboard({ vault, onGoToImport }: { vault: Vault; onGoToImport:
                   emptyMessage={`${summary.ym} 에 기록된 부채가 없습니다.`}
                 />
 
+                {summary.excluded.length > 0 && (
+                  <div
+                    className="rounded-lg border px-3 py-2 text-sm"
+                    style={{ borderColor: 'var(--line)' }}
+                  >
+                    <p style={{ color: 'var(--ink-muted)' }}>
+                      아래 항목은 다른 항목에 이미 포함되어 있어 <strong>합계에 넣지 않았습니다.</strong>
+                    </p>
+                    <ul className="mt-1.5 space-y-1">
+                      {summary.excluded.map((entry) => (
+                        <li key={entry.itemId} className="flex items-baseline justify-between gap-3">
+                          <span className="min-w-0 truncate">
+                            {entry.name}{' '}
+                            <span className="text-xs" style={{ color: 'var(--ink-muted)' }}>
+                              {entry.reason}
+                            </span>
+                          </span>
+                          <span className="tnum shrink-0">
+                            {mask ? '****' : `${entry.amount < 0 ? '−' : ''}${formatAmount(Math.abs(entry.amount))}원`}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
                 {summary.debtOffsets.length > 0 && (
                   <div
                     className="rounded-lg border px-3 py-2 text-sm"

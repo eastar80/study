@@ -51,6 +51,22 @@ export interface Item {
   sourceKey?: string
   /** Loans carry an interest rate on each monthly snapshot. */
   isLoan?: boolean
+  /**
+   * Set when this balance is already included in another item, and why.
+   *
+   * A value here means the item is never added to a total again — not to assets,
+   * not to debts, not to net worth, not to a composition bar. It still appears in
+   * the ledger, because the monthly detail is worth keeping.
+   *
+   * 마통 is the case that forced this: it is entered in 잔액입력 for the monthly
+   * detail, but 자산보유현황's 은행부채 column already contains it, so counting
+   * both meant counting it twice.
+   *
+   * The reason is a string rather than a boolean so it cannot be set without
+   * saying why, and so screens can show the explanation. A total that silently
+   * disagrees with the rows above it is worse than the double count.
+   */
+  countedElsewhere?: string
 }
 
 export interface Snapshot {

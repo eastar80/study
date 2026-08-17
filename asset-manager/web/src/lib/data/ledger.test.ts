@@ -118,6 +118,38 @@ describe('buildLedger', () => {
     })
   })
 
+  describe('an item already counted inside another one', () => {
+    /** 마통 is contained in 은행부채, so it must not be added to a total again. */
+    function contained(): AssetData {
+      const base = data()
+      return {
+        ...base,
+        items: base.items.map((item) =>
+          item.id === 'i3' ? { ...item, countedElsewhere: '은행부채에 포함' } : item,
+        ),
+      }
+    }
+
+    it('keeps its row and its own category subtotal', () => {
+      const rows = buildLedger(contained(), 2026)
+      expect(at(rows, 'i3', 1)).toBe(300)
+      expect(at(rows, 's-c2', 1)).toBe(300)
+    })
+
+    it('is left out of the debt total', () => {
+      // 주택담보대출 alone, without the 마통 that 은행부채 already covers.
+      expect(at(buildLedger(contained(), 2026), 'total-debt', 1)).toBe(2000)
+    })
+
+    it('does not leak into assets instead', () => {
+      expect(at(buildLedger(contained(), 2026), 'total-asset', 1)).toBe(1500)
+    })
+
+    it('is left out of net worth', () => {
+      expect(at(buildLedger(contained(), 2026), 'total-net', 1)).toBe(1500 - 2000)
+    })
+  })
+
   it('computes net worth as assets minus debts', () => {
     const rows = buildLedger(data(), 2026)
     expect(at(rows, 'total-net', 1)).toBe(1500 - 2300)
