@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react'
 import {
+  avgPriceKrw,
   byOwner,
-  compositionByCurrency,
+  compositionAt,
   costOf,
   dimensionKeys,
   indexToBase,
@@ -11,7 +12,7 @@ import {
 } from '../lib/data/portfolio'
 import { formatAmount, formatCompactWon, formatPercent } from '../lib/data/format'
 import { seriesColor, SLOT_COUNT } from '../lib/chart/palette'
-import type { CurrencyCode, Holding } from '../lib/data/model'
+import type { Holding } from '../lib/data/model'
 import type { Vault } from '../state/useVault'
 import { Button, Card, Muted } from '../ui/primitives'
 import { StatTile } from '../ui/chart/StatTile'
@@ -19,8 +20,6 @@ import { StackedBar, type Segment } from '../ui/chart/StackedBar'
 import { TrendChart, type Series } from '../ui/chart/TrendChart'
 
 const TREND_MONTHS = 60
-
-const SYMBOL: Partial<Record<CurrencyCode, string>> = { KRW: '₩', USD: '$', JPY: '¥' }
 
 export function Portfolio({ vault, onGoToImport }: { vault: Vault; onGoToImport: () => void }) {
   const { data } = vault
@@ -33,7 +32,8 @@ export function Portfolio({ vault, onGoToImport }: { vault: Vault; onGoToImport:
   const window = useMemo(() => recentNavs(data.portfolioNavs, TREND_MONTHS), [data.portfolioNavs])
   const ownerList = useMemo(() => owners(data.holdings), [data.holdings])
   const visible = useMemo(() => byOwner(data.holdings, owner), [data.holdings, owner])
-  const groups = useMemo(() => compositionByCurrency(visible, dimension), [visible, dimension])
+  const composition = useMemo(() => compositionAt(visible, dimension), [visible, dimension])
+  const byCurrency = useMemo(() => compositionAt(visible, 'currency'), [visible])
 
   /**
    * Slots come from every holding, not the visible ones: filtering by owner must
@@ -43,6 +43,11 @@ export function Portfolio({ vault, onGoToImport }: { vault: Vault; onGoToImport:
     const keys = dimensionKeys(data.holdings, dimension)
     return new Map(keys.map((key, index) => [key, index]))
   }, [data.holdings, dimension])
+
+  const currencySlotOf = useMemo(() => {
+    const keys = dimensionKeys(data.holdings, 'currency')
+    return new Map(keys.map((key, index) => [key, index]))
+  }, [data.holdings])
 
   const series: Series[] = useMemo(() => {
     const fund = indexToBase(window.map((month) => month.nav))
@@ -179,45 +184,50 @@ export function Portfolio({ vault, onGoToImport }: { vault: Vault; onGoToImport:
           >
             <div className="space-y-5">
               <Muted>
-                매입원가 기준입니다. 현재 평가액과 종목별 수익률은 시세 연동이 붙는 다음 단계에서
-                채웁니다.
+                <strong>매입원가 기준</strong>이고 모두 <strong>원화</strong>입니다 — 시트의 매입원가
+                컬럼이 이미 환산된 값입니다. 현재 평가액과 종목별 수익률은 시세 연동이 붙는 다음
+                단계에서 채웁니다.
               </Muted>
 
-              {groups.map((group) => (
-                <div key={group.currency}>
-                  {groups.length > 1 && (
-                    <p className="mb-2 text-sm font-medium">
-                      {group.currency}{' '}
-                      <span className="tnum font-normal" style={{ color: 'var(--ink-muted)' }}>
-                        {mask ? '****' : `${SYMBOL[group.currency] ?? ''}${formatAmount(group.total)}`}
-                      </span>
-                    </p>
-                  )}
-                  <StackedBar
-                    segments={group.slices.map((slice): Segment => {
-                      const slot = slotOf.get(slice.key) ?? SLOT_COUNT
-                      return {
-                        key: `${group.currency}-${slice.key}`,
-                        name: slice.key,
-                        share: slice.share,
-                        amount: slice.cost,
-                        slot,
-                        color: seriesColor(slot),
-                      }
-                    })}
-                    total={group.total}
-                    mask={mask}
-                    currency={group.currency}
-                  />
-                </div>
-              ))}
+              <StackedBar
+                segments={composition.slices.map((slice): Segment => {
+                  const slot = slotOf.get(slice.key) ?? SLOT_COUNT
+                  return {
+                    key: slice.key,
+                    name: slice.key,
+                    share: slice.share,
+                    amount: slice.cost,
+                    slot,
+                    color: seriesColor(slot),
+                  }
+                })}
+                total={composition.total}
+                mask={mask}
+              />
+            </div>
+          </Card>
 
-              {groups.length > 1 && (
-                <Muted>
-                  통화가 다른 금액은 더하지 않았습니다. 환율이 아직 없어서, 합치려면 없는 숫자를
-                  지어내야 합니다. 시세 연동과 함께 채웁니다.
-                </Muted>
-              )}
+          <Card title="통화별">
+            <div className="space-y-3">
+              <Muted>
+                거래소가 정하는 통화별 매입원가입니다. 금액은 원화로 환산된 값이라 그대로 더할 수
+                있습니다.
+              </Muted>
+              <StackedBar
+                segments={byCurrency.slices.map((slice): Segment => {
+                  const slot = currencySlotOf.get(slice.key) ?? SLOT_COUNT
+                  return {
+                    key: slice.key,
+                    name: slice.key,
+                    share: slice.share,
+                    amount: slice.cost,
+                    slot,
+                    color: seriesColor(slot),
+                  }
+                })}
+                total={byCurrency.total}
+                mask={mask}
+              />
             </div>
           </Card>
 
@@ -292,15 +302,12 @@ function HoldingTable({ holdings, mask }: { holdings: Holding[]; mask: boolean }
                 {mask ? '****' : formatAmount(holding.quantity)}
               </td>
               <td className="tnum px-2 py-1.5 text-right">
-                {mask ? '****' : formatAmount(holding.avgPrice, { currency: holding.currency })}
+                {/* 단가 carries a 100× scale for yen; applying it is what makes
+                    the column readable as won. */}
+                {mask ? '****' : formatAmount(Math.round(avgPriceKrw(holding)))}
               </td>
               <td className="tnum px-2 py-1.5 text-right">
-                {/* 억/만 is a won reading; a dollar cost must not wear it. */}
-                {mask
-                  ? '****'
-                  : holding.currency === 'KRW'
-                    ? formatCompactWon(costOf(holding))
-                    : formatAmount(costOf(holding), { currency: holding.currency, showSymbol: true })}
+                {formatCompactWon(costOf(holding), { mask })}
               </td>
             </tr>
           ))}

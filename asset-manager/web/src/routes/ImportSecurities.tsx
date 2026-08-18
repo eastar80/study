@@ -6,10 +6,10 @@ import {
   parseHoldingsInput,
   parseNavSheet,
   type HoldingMismatch,
-  type ImpliedRate,
+  type PriceScale,
   type NavMismatch,
 } from '../lib/import/portfolioWorkbook'
-import { compositionByCurrency } from '../lib/data/portfolio'
+import { compositionAt } from '../lib/data/portfolio'
 import type { Vault } from '../state/useVault'
 import { Alert, Badge, Button, Card, Muted } from '../ui/primitives'
 import { SectionTitle, Stat, readSheet, won } from './importShared'
@@ -112,7 +112,10 @@ export function ImportSecurities({
   const passes = preview?.navs != null && navMismatches.length === 0 && costMismatches.length === 0
 
   const currencies = useMemo(
-    () => (preview?.holdings ? compositionByCurrency(preview.holdings.holdings, 'style') : []),
+    () =>
+      preview?.holdings
+        ? compositionAt(preview.holdings.holdings, 'currency').slices.map((slice) => slice.key)
+        : [],
     [preview],
   )
 
@@ -164,7 +167,7 @@ export function ImportSecurities({
               <Stat label="보유 종목" value={`${preview.holdings.holdings.length}개`} />
               <Stat
                 label="통화"
-                value={currencies.map((group) => group.currency).join(' · ') || '—'}
+                value={currencies.join(' · ') || '—'}
               />
             </dl>
           </Card>
@@ -232,26 +235,32 @@ export function ImportSecurities({
 
               {currencies.length > 1 && (
                 <Alert tone="info">
-                  외화 종목이 있습니다 ({currencies.map((group) => group.currency).join(' · ')}).{' '}
+                  외화 종목이 있습니다 ({currencies.join(' · ')}).{' '}
                   <strong>통화는 지역이 아니라 거래소로 정합니다</strong> — 미국 지수를 담아도 KRX에서
-                  거래되면 원화입니다. 환율이 아직 없어 통화가 다른 금액은 합치지 않습니다.
+                  거래되면 원화입니다. 통화는 시세를 어디서 조회할지를 정하는 값이고,{' '}
+                  <strong>금액은 모두 원화</strong>입니다.
                 </Alert>
               )}
 
-              {preview.holdings.impliedRates.length > 0 && (
+              {preview.holdings.priceScales.length > 0 && (
                 <div>
-                  <SectionTitle>시트가 쓴 환율</SectionTitle>
+                  <SectionTitle>단가 배율</SectionTitle>
                   <Muted>
-                    외화 종목의 <strong>매입원가</strong> 는 <code>수량 × 단가</code> 가 아니라 그것을
-                    환산한 값이라, 두 값의 비가 곧 시트가 쓴 환율입니다. 그래서 이 항목들은 불일치로
-                    보지 않습니다. 1에 가까우면 그 통화로 적힌 것입니다.
+                    <strong>매입원가는 통화와 무관하게 원화 컬럼</strong>입니다. <code>단가</code> 도 이미
+                    환산된 값인데 엔화만 100배로 적혀 있어서(원/100엔 환율을 100으로 나누지 않은 값), 두
+                    컬럼의 비가 <strong>환율이 아니라 단위 배율</strong>이 됩니다. 그래서 불일치로 보지
+                    않고, 이 배율을 적용해 단가를 원화로 읽습니다.
                   </Muted>
-                  <ImpliedRateTable rates={preview.holdings.impliedRates} />
-                  <Muted>
-                    엔화는 <strong>원/엔</strong> 과 <strong>원/100엔</strong> 표기가 정확히 100배
-                    다릅니다. 시세 연동을 붙일 때 이 값이 기준이 됩니다.
-                  </Muted>
+                  <PriceScaleTable scales={preview.holdings.priceScales} />
                 </div>
+              )}
+
+              {preview.holdings.costlessRows.length > 0 && (
+                <Alert tone="warn">
+                  다음 종목은 <strong>매입원가 칸이 비어</strong> 있어 원화 금액을 알 수 없습니다.{' '}
+                  <code>수량 × 단가</code> 로 대신했는데, 엔화라면 100배 커집니다:{' '}
+                  <strong>{preview.holdings.costlessRows.join(', ')}</strong>
+                </Alert>
               )}
             </div>
           </Card>
@@ -349,14 +358,14 @@ function CostMismatchTable({ mismatches }: { mismatches: HoldingMismatch[] }) {
   )
 }
 
-function ImpliedRateTable({ rates }: { rates: ImpliedRate[] }) {
+function PriceScaleTable({ scales }: { scales: PriceScale[] }) {
   const digits = new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 4 })
   return (
     <div className="mt-2 overflow-x-auto rounded-lg border" style={{ borderColor: 'var(--line)' }}>
       <table className="w-full min-w-[520px] text-sm">
         <thead>
           <tr className="border-b" style={{ borderColor: 'var(--line)' }}>
-            {['종목', '통화', '수량 × 단가', '시트 매입원가', '환율'].map((label, index) => (
+            {['종목', '통화', '수량 × 단가', '매입원가 (원)', '배율'].map((label, index) => (
               <th
                 key={label}
                 scope="col"
@@ -368,13 +377,13 @@ function ImpliedRateTable({ rates }: { rates: ImpliedRate[] }) {
           </tr>
         </thead>
         <tbody>
-          {rates.map((rate) => (
-            <tr key={rate.name} className="border-b" style={{ borderColor: 'var(--line)' }}>
-              <td className="px-3 py-1.5">{rate.name}</td>
-              <td className="px-3 py-1.5">{rate.currency}</td>
-              <td className="tnum px-3 py-1.5 text-right">{won.format(Math.round(rate.cost))}</td>
-              <td className="tnum px-3 py-1.5 text-right">{won.format(Math.round(rate.sheet))}</td>
-              <td className="tnum px-3 py-1.5 text-right">{digits.format(rate.rate)}</td>
+          {scales.map((scale) => (
+            <tr key={scale.name} className="border-b" style={{ borderColor: 'var(--line)' }}>
+              <td className="px-3 py-1.5">{scale.name}</td>
+              <td className="px-3 py-1.5">{scale.currency}</td>
+              <td className="tnum px-3 py-1.5 text-right">{won.format(Math.round(scale.raw))}</td>
+              <td className="tnum px-3 py-1.5 text-right">{won.format(Math.round(scale.costKrw))}</td>
+              <td className="tnum px-3 py-1.5 text-right">{digits.format(scale.scale)}</td>
             </tr>
           ))}
         </tbody>

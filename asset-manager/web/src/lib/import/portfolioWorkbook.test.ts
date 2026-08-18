@@ -194,6 +194,8 @@ describe('parseHoldingsInput', () => {
       ticker: '069500',
       quantity: 10,
       avgPrice: 30000,
+      costKrw: 300000,
+      priceScale: 1,
       dividendPerShare: 500,
       style: '성장',
       region: '국내',
@@ -225,42 +227,49 @@ describe('parseHoldingsInput', () => {
   })
 
   it('does not call a converted foreign cost a mismatch', () => {
-    // 매입원가 for a foreign holding is that cost converted to won, so it is
-    // never 수량 × 단가. Treating it as one blocked the whole import.
+    // 매입원가 is a won column for every holding, so it is never 수량 × 단가 for a
+    // foreign one. Treating it as one blocked the whole import.
     const rows = holdingRows()
-    // 400 × 2,500 = 1,000,000 yen, recorded as 784,083 won.
-    rows[2]![5] = 400
     rows[2]![10] = 784083
-    const { mismatches, impliedRates } = parseHoldingsInput(holdingsSheet(rows))
-
+    const { mismatches } = parseHoldingsInput(holdingsSheet(rows))
     expect(mismatches).toEqual([])
-    const yen = impliedRates.find((rate) => rate.currency === 'JPY')!
-    expect(yen.name).toBe('미쓰비시상사')
-    expect(yen.cost).toBe(1_000_000)
-    expect(yen.sheet).toBe(784083)
-    expect(yen.rate).toBeCloseTo(0.784083)
   })
 
-  it('reads the rate back whichever way the sheet writes it', () => {
-    // 원/엔 and 원/100엔 differ by exactly 100×, which is what made this look
-    // like an error. Either convention is reported, not judged.
+  it('reads the yen 100x scale out of the sheet, and keeps the won cost', () => {
+    // The real case: 수량 × 단가 is 100× the won cost, because 단가 was multiplied
+    // by a 원/100엔 rate without dividing by 100.
     const rows = holdingRows()
-    rows[2]![5] = 400
-    rows[2]![10] = 78_408_300
-    const hundredFold = parseHoldingsInput(holdingsSheet(rows)).impliedRates.find(
-      (rate) => rate.currency === 'JPY',
-    )!
-    expect(hundredFold.rate).toBeCloseTo(78.4083)
+    rows[2]![5] = 31_363
+    rows[2]![6] = 2_500
+    rows[2]![10] = 784_075
+    const { holdings, priceScales } = parseHoldingsInput(holdingsSheet(rows))
+
+    const yen = holdings.find((holding) => holding.name === '미쓰비시상사')!
+    expect(yen.costKrw).toBe(784_075)
+    expect(yen.priceScale).toBeCloseTo(0.01)
+
+    const scale = priceScales.find((entry) => entry.currency === 'JPY')!
+    expect(scale.raw).toBe(78_407_500)
+    expect(scale.costKrw).toBe(784_075)
+    expect(scale.scale).toBeCloseTo(0.01)
   })
 
-  it('reports a rate near 1 when the column is already in that currency', () => {
-    const rows = holdingRows()
-    rows[2]![5] = 400
-    rows[2]![10] = 1_000_000
-    const yen = parseHoldingsInput(holdingsSheet(rows)).impliedRates.find(
-      (rate) => rate.currency === 'JPY',
+  it('reports a scale of 1 for a dollar holding, as observed', () => {
+    const scale = parseHoldingsInput(holdingsSheet(holdingRows())).priceScales.find(
+      (entry) => entry.currency === 'USD',
     )!
-    expect(yen.rate).toBeCloseTo(1)
+    expect(scale.scale).toBeCloseTo(1)
+  })
+
+  it('names a position whose 매입원가 cell is blank instead of guessing', () => {
+    // Falling back to 수량 × 단가 silently is how the yen amounts came out 100×
+    // too large in the first place.
+    const rows = holdingRows()
+    rows[2]![10] = null
+    const { holdings, costlessRows } = parseHoldingsInput(holdingsSheet(rows))
+
+    expect(costlessRows).toEqual(['미쓰비시상사'])
+    expect(holdings.find((holding) => holding.name === '미쓰비시상사')!.costKrw).toBeUndefined()
   })
 
   it('tolerates rounding on a decimal price rather than crying mismatch', () => {
