@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
-  avgPriceKrw,
+  avgPriceNative,
   byOwner,
   compositionAt,
+  costKrwOf,
   costOf,
   dimensionKeys,
   indexToBase,
@@ -10,7 +11,7 @@ import {
   recentNavs,
   summariseNavs,
 } from './portfolio'
-import type { Holding, PortfolioNav } from './model'
+import type { CurrencyCode, Holding, PortfolioNav } from './model'
 
 function navs(): PortfolioNav[] {
   return [
@@ -156,72 +157,126 @@ describe('owners and filtering', () => {
   })
 })
 
+/** 원 per ONE unit, the only unit `krwPerUnit` accepts. */
+const RATES: ReadonlyMap<CurrencyCode, number> = new Map<CurrencyCode, number>([
+  ['USD', 1400],
+  ['JPY', 9],
+])
+
 describe('compositionAt', () => {
   const mixed = [
-    holding({ id: 'h1', style: '성장', currency: 'KRW', quantity: 10, avgPrice: 30000, costKrw: 300_000 }),
-    holding({ id: 'h2', style: '배당', currency: 'KRW', quantity: 10, avgPrice: 10000, costKrw: 100_000 }),
-    holding({ id: 'h3', style: '성장', currency: 'USD', quantity: 5, avgPrice: 280_000, costKrw: 1_400_000 }),
-    // Yen: 단가 carries 100×, so only costKrw is right.
+    holding({ id: 'h1', style: '성장', currency: 'KRW', quantity: 10, avgPrice: 30000, costNative: 300_000 }),
+    holding({ id: 'h2', style: '배당', currency: 'KRW', quantity: 10, avgPrice: 10000, costNative: 100_000 }),
+    // 1,000달러 → 1,400,000원.
+    holding({ id: 'h3', style: '성장', currency: 'USD', quantity: 5, avgPrice: 200, costNative: 1_000 }),
+    // 100만엔 → 900만원. 단가 carries 100×, so only 매입원가 is right.
     holding({
       id: 'h4',
       style: '배당',
       currency: 'JPY',
       quantity: 400,
-      avgPrice: 2_500_000,
-      costKrw: 10_000_000,
+      avgPrice: 250_000,
+      costNative: 1_000_000,
       priceScale: 0.01,
     }),
   ]
 
-  it('adds every currency together, because the costs are all won', () => {
-    // This used to split by currency, on the mistaken belief that costs were in
-    // each holding's own currency and needed a rate before they could be summed.
-    const { total, slices } = compositionAt(mixed, 'style')
-    expect(total).toBe(11_800_000)
+  it('converts every currency to won before adding them up', () => {
+    // The costs come out of the sheet in each holding's own currency, so they
+    // cannot share one bar until a rate has been applied.
+    const { total, slices, unconverted } = compositionAt(mixed, 'style', RATES)
+    expect(total).toBe(400_000 + 1_400_000 + 9_000_000)
+    expect(unconverted).toEqual([])
     expect(slices.map((slice) => slice.key)).toEqual(['배당', '성장'])
-    expect(slices[0]!.cost).toBe(10_100_000)
+    expect(slices[0]!.cost).toBe(100_000 + 9_000_000)
     expect(slices.reduce((sum, slice) => sum + slice.share, 0)).toBeCloseTo(1)
   })
 
   it('groups by currency with the same function', () => {
-    const { slices } = compositionAt(mixed, 'currency')
+    const { slices } = compositionAt(mixed, 'currency', RATES)
     expect(slices.map((slice) => slice.key)).toEqual(['JPY', 'USD', 'KRW'])
-    expect(slices.find((slice) => slice.key === 'JPY')!.cost).toBe(10_000_000)
+    expect(slices.find((slice) => slice.key === 'JPY')!.cost).toBe(9_000_000)
+  })
+
+  it('leaves out a holding with no rate and names it, rather than adding zero', () => {
+    // Silently adding 0 shrinks the total and redraws every other share, with
+    // nothing on screen to say why.
+    const { total, unconverted } = compositionAt(mixed, 'style', new Map([['USD', 1400]]))
+    expect(total).toBe(400_000 + 1_400_000)
+    expect(unconverted).toEqual(['kodex 200'])
   })
 
   it('groups by region, account and owner too', () => {
-    expect(compositionAt(mixed, 'region').slices[0]!.key).toBe('국내')
-    expect(compositionAt(mixed, 'account').slices[0]!.key).toBe('유안타주식')
-    expect(compositionAt(mixed, 'owner').slices[0]!.key).toBe('호빵')
+    expect(compositionAt(mixed, 'region', RATES).slices[0]!.key).toBe('국내')
+    expect(compositionAt(mixed, 'account', RATES).slices[0]!.key).toBe('유안타주식')
+    expect(compositionAt(mixed, 'owner', RATES).slices[0]!.key).toBe('호빵')
   })
 
   it('labels a blank classification rather than dropping the holding', () => {
-    expect(compositionAt([holding({ style: '', costKrw: 1000 })], 'style').slices[0]!.key).toBe('미분류')
+    expect(
+      compositionAt([holding({ style: '', costNative: 1000 })], 'style', RATES).slices[0]!.key,
+    ).toBe('미분류')
   })
 
   it('leaves out a position with no cost, which would be a zero-width segment', () => {
-    expect(compositionAt([holding({ quantity: 0, avgPrice: 0 })], 'style').slices).toEqual([])
+    expect(compositionAt([holding({ quantity: 0, avgPrice: 0 })], 'style', RATES).slices).toEqual([])
   })
 })
 
 describe('costOf', () => {
-  it('takes the sheet\'s own won figure when it has one', () => {
+  it('takes the sheet\'s own figure, in the holding\'s own currency', () => {
     // 수량 × 단가 would be 100× for a yen holding, so the sheet wins.
-    expect(costOf(holding({ quantity: 400, avgPrice: 2_500_000, costKrw: 10_000_000 }))).toBe(10_000_000)
+    expect(costOf(holding({ quantity: 400, avgPrice: 250_000, costNative: 1_000_000 }))).toBe(1_000_000)
+  })
+
+  it('reads data written before the rename, where the same number was called costKrw', () => {
+    // The value was always the native amount; only the label was wrong.
+    expect(costOf(holding({ quantity: 400, avgPrice: 250_000, costKrw: 1_000_000 }))).toBe(1_000_000)
   })
 
   it('falls back to quantity times price when the cell was blank', () => {
     expect(costOf(holding({ quantity: 10, avgPrice: 30000 }))).toBe(300000)
   })
+
+  it('ignores 매입원가 for cash and uses the amount held', () => {
+    // A cash row's 단가 holds an exchange rate, so the two columns do not share a
+    // unit the way a stock's do. Cash does not appreciate either, so 수량 is both
+    // the cost and the value in its own currency.
+    expect(costOf(holding({ ticker: 'cash', quantity: 86_667, costNative: 780_003 }))).toBe(86_667)
+  })
 })
 
-describe('avgPriceKrw', () => {
-  it('applies the scale, so a yen 단가 reads as won', () => {
-    expect(avgPriceKrw(holding({ avgPrice: 2_500_000, priceScale: 0.01 }))).toBe(25_000)
+describe('costKrwOf', () => {
+  it('applies the rate, which is what foreign costs were missing', () => {
+    expect(costKrwOf(holding({ currency: 'USD', costNative: 1_000 }), RATES)).toBe(1_400_000)
+    expect(costKrwOf(holding({ currency: 'JPY', costNative: 1_000_000 }), RATES)).toBe(9_000_000)
+  })
+
+  it('needs no rate for won', () => {
+    expect(costKrwOf(holding({ currency: 'KRW', costNative: 300_000 }), new Map())).toBe(300_000)
+  })
+
+  it('is null without a rate, never converted at 1', () => {
+    expect(costKrwOf(holding({ currency: 'USD', costNative: 1_000 }), new Map())).toBeNull()
+  })
+
+  it('prices foreign cash at 수량 × 환율', () => {
+    const yen = holding({ ticker: 'cash', currency: 'JPY', quantity: 86_667, costNative: 780_003 })
+    expect(costKrwOf(yen, RATES)).toBe(86_667 * 9)
+  })
+})
+
+describe('avgPriceNative', () => {
+  it('applies the scale, so a yen 단가 reads as a per-share yen price', () => {
+    expect(avgPriceNative(holding({ currency: 'JPY', avgPrice: 250_000, priceScale: 0.01 }))).toBe(2_500)
   })
 
   it('leaves a price alone when there is no scale', () => {
-    expect(avgPriceKrw(holding({ avgPrice: 30_000 }))).toBe(30_000)
+    expect(avgPriceNative(holding({ avgPrice: 30_000 }))).toBe(30_000)
+  })
+
+  it('is one unit for cash, matching its current price', () => {
+    expect(avgPriceNative(holding({ ticker: 'cash', avgPrice: 900 }))).toBe(1)
   })
 })
 

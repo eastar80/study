@@ -194,7 +194,7 @@ describe('parseHoldingsInput', () => {
       ticker: '069500',
       quantity: 10,
       avgPrice: 30000,
-      costKrw: 300000,
+      costNative: 300000,
       priceScale: 1,
       dividendPerShare: 500,
       style: '성장',
@@ -235,9 +235,10 @@ describe('parseHoldingsInput', () => {
     expect(mismatches).toEqual([])
   })
 
-  it('reads the yen 100x scale out of the sheet, and keeps the won cost', () => {
-    // The real case: 수량 × 단가 is 100× the won cost, because 단가 was multiplied
-    // by a 원/100엔 rate without dividing by 100.
+  it('reads the yen 100x scale out of the sheet, and keeps the sheet\'s own cost', () => {
+    // The real case: 수량 × 단가 is 100× 매입원가, because 단가 was multiplied by a
+    // 원/100엔 rate without dividing by 100. Both columns are **yen**; the ratio
+    // only ever said they share a unit, not which one (see docs/06 §4.3).
     const rows = holdingRows()
     rows[2]![5] = 31_363
     rows[2]![6] = 2_500
@@ -245,12 +246,12 @@ describe('parseHoldingsInput', () => {
     const { holdings, priceScales } = parseHoldingsInput(holdingsSheet(rows))
 
     const yen = holdings.find((holding) => holding.name === '미쓰비시상사')!
-    expect(yen.costKrw).toBe(784_075)
+    expect(yen.costNative).toBe(784_075)
     expect(yen.priceScale).toBeCloseTo(0.01)
 
     const scale = priceScales.find((entry) => entry.currency === 'JPY')!
     expect(scale.raw).toBe(78_407_500)
-    expect(scale.costKrw).toBe(784_075)
+    expect(scale.costNative).toBe(784_075)
     expect(scale.scale).toBeCloseTo(0.01)
   })
 
@@ -269,7 +270,7 @@ describe('parseHoldingsInput', () => {
     const { holdings, costlessRows } = parseHoldingsInput(holdingsSheet(rows))
 
     expect(costlessRows).toEqual(['미쓰비시상사'])
-    expect(holdings.find((holding) => holding.name === '미쓰비시상사')!.costKrw).toBeUndefined()
+    expect(holdings.find((holding) => holding.name === '미쓰비시상사')!.costNative).toBeUndefined()
   })
 
   it('tolerates rounding on a decimal price rather than crying mismatch', () => {

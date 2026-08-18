@@ -10,7 +10,14 @@
 
 import type { CurrencyCode } from '../data/model'
 
-/** Exchange suffixes Yahoo expects, by the workbook's 거래소 value. */
+/**
+ * Exchange suffixes Yahoo expects, by the workbook's 거래소 value.
+ *
+ * Every one of these markets identifies a listing by a **numeric code** — six
+ * digits on KRX and KOSDAQ, four on JPX. The `digitsOnly` rule below leans on
+ * that, so a row whose 거래소 says KRX but whose ticker is letters is read as a US
+ * listing instead of getting a suffix it cannot carry.
+ */
 const SUFFIX: Record<string, string> = {
   krx: '.KS',
   kosdaq: '.KQ',
@@ -45,8 +52,20 @@ export function toYahooSymbol(ticker: string, exchange: string): SymbolResult {
   // one would resolve to nothing.
   if (/\.[A-Za-z]{1,3}$/.test(bare)) return { symbol: bare.toUpperCase() }
 
+  const digitsOnly = /^\d+$/.test(bare)
   const suffix = SUFFIX[venue]
-  if (suffix) return { symbol: `${bare}${suffix}` }
+
+  /*
+   * The exchange column alone is not enough. `dgro`, `schd` and `o` sit in rows
+   * labelled KRX — they are held through a domestic broker — and `dgro.KS` is a
+   * real KRX listing, so the lookup *succeeds* and returns another company's
+   * price. A wrong suffix is worse than no suffix, and here it was also silent.
+   *
+   * So the ticker's shape decides: only a numeric code can be a KRX or JPX
+   * listing. Letters mean a US symbol, whatever the 거래소 cell says.
+   */
+  if (suffix && digitsOnly) return { symbol: `${bare}${suffix}` }
+  if (suffix) return { symbol: bare.toUpperCase() }
 
   // USD, or an unlabelled venue: US symbols carry no suffix, which matches the
   // importer's default of treating an unlabelled exchange as won-market US-free.

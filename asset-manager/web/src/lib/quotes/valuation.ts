@@ -5,9 +5,12 @@
  * market value shows in won.**
  *
  *   평가금액(원) = 수량 × 주가(해당 통화) × 환율(원/1단위)
+ *   매입원가(원) = 매입원가(해당 통화) × 환율(원/1단위)
  *
- * Cost basis is already won — the workbook's 매입원가 column (see
- * docs/06 §4.3), so a return is a won-to-won comparison and needs no rate.
+ * Both sides of the return need the rate, because the workbook's 매입원가 column is
+ * in the holding's own currency too (see docs/06 §4.3). Treating it as won is a
+ * mistake this file made for a while, and it understated every foreign cost by the
+ * exchange rate.
  */
 
 import type { CurrencyCode, Holding } from '../data/model'
@@ -36,65 +39,99 @@ export interface Valued {
   rate: number | null
   /** Won. Null when the price or the rate is missing. */
   marketValueKrw: number | null
-  /** Won. Cost comes from the sheet and is already won. */
-  costKrw: number
+  /** Won — the sheet's own-currency cost at `rate`. Null without a rate. */
+  costKrw: number | null
   gainKrw: number | null
   returnPct: number | null
+  /** Set when the price was typed in rather than fetched. */
+  manualPrice?: boolean
   /** Why there is no value, when there is none. */
   problem?: string
 }
 
 /**
- * A position with no quotable ticker — cash, a fund with no listing.
+ * A position with no quotable ticker — cash, in any currency.
  *
- * Valued at the won figure the sheet recorded, because cash has no market price
- * to look up. `quantity × rate` looked tempting: the yen cash line stores the yen
- * amount as its quantity with the rate in 단가, so it would come out right. But
- * the won cash line stores quantity 1 with the amount in 단가, and there
- * `quantity × rate` is 1원. The recorded cost is right in both shapes.
+ * Its price is **one unit of its own currency**: 1원, 1달러, 1엔. So it goes
+ * through the same `수량 × 현재가 × 환율` as everything else, and its 수량 is the
+ * amount held. The 단가 cell on a cash row holds an exchange rate rather than a
+ * price, so it is never read.
  *
- * The cost was struck at whatever rate the sheet used, so a foreign cash line
- * does not re-value as the rate moves. Refining that needs the historical rate,
- * which the workbook does not carry.
+ * A foreign cash line therefore re-values as the rate moves, which is what cash
+ * actually does.
  */
-function isCashLike(holding: Holding): boolean {
-  return holding.ticker.trim() === '' || /^cash$/i.test(holding.ticker.trim())
+export function isCashLike(holding: Holding): boolean {
+  const ticker = holding.ticker.trim()
+  return ticker === '' || /^cash$/i.test(ticker)
 }
 
+/**
+ * @param price In the holding's own currency. Ignored for cash, which is 1.
+ * @param rate 원 per ONE unit. Null when the pair was not fetched.
+ * @param costKrw The holding's own-currency cost already converted; see
+ *   `costKrwOf`. Null when the rate is missing.
+ * @param options.quoteCurrency What the quote source says the price is in. Given,
+ *   it is checked against the holding's currency; see below.
+ */
 export function valueHolding(
   holding: Holding,
   price: number | null,
   rate: number | null,
-  costKrw: number,
+  costKrw: number | null,
+  options: { manualPrice?: boolean; quoteCurrency?: string } = {},
 ): Valued {
+  // Cash is priced at one unit of its own currency, not looked up.
+  const effectivePrice = isCashLike(holding) ? 1 : price
+
+  /*
+   * The quote's own currency is a cross-check, and it catches a case the sheet
+   * cannot: `dgro` and `schd` are US listings held through a domestic broker, so
+   * the workbook's 거래소 column says KRX and the importer reads them as won. The
+   * price that comes back is dollars. Multiplying by a rate of 1 gave ₩68 and a
+   * −99.9% return — a wrong number that looks like a number.
+   *
+   * Converting at the quote's currency instead would be guessing which unit the
+   * 매입원가 column used for those rows, and this project has already guessed a
+   * currency wrong twice. So the disagreement is reported and the value withheld.
+   */
+  const quoteCurrency = options.quoteCurrency?.toUpperCase()
+  const currencyMismatch =
+    !isCashLike(holding) &&
+    options.manualPrice !== true &&
+    quoteCurrency !== undefined &&
+    quoteCurrency !== '' &&
+    quoteCurrency !== holding.currency
+
   let marketValueKrw: number | null = null
   let problem: string | undefined
 
-  if (isCashLike(holding)) {
-    // No price to fetch and no rate needed: the sheet's won figure stands.
-    marketValueKrw = costKrw
-  } else if (price === null) {
+  if (currencyMismatch) {
+    problem = `시세는 ${quoteCurrency}, 시트의 통화는 ${holding.currency} 입니다. 거래소 칸을 확인하세요.`
+  } else if (effectivePrice === null) {
     problem = '시세를 받지 못했습니다.'
   } else if (rate === null) {
     problem = `${holding.currency} 환율이 없습니다.`
   } else {
-    marketValueKrw = holding.quantity * price * rate
+    marketValueKrw = holding.quantity * effectivePrice * rate
   }
 
   // Left null rather than falling back to cost: showing the cost would read as a
   // 0% return, which is a different claim from "unknown".
-  const gainKrw = marketValueKrw === null ? null : marketValueKrw - costKrw
+  const gainKrw = marketValueKrw === null || costKrw === null ? null : marketValueKrw - costKrw
   const returnPct =
-    marketValueKrw === null || costKrw === 0 ? null : ((marketValueKrw - costKrw) / Math.abs(costKrw)) * 100
+    gainKrw === null || costKrw === null || costKrw === 0 ? null : (gainKrw / Math.abs(costKrw)) * 100
 
   return {
     holding,
-    price: isCashLike(holding) ? null : price,
+    // Withheld on a mismatch: the number is real but not in this row's currency,
+    // and the column is labelled with that currency.
+    price: currencyMismatch ? null : effectivePrice,
     rate,
     marketValueKrw,
     costKrw,
     gainKrw,
     returnPct,
+    ...(options.manualPrice ? { manualPrice: true } : {}),
     ...(problem ? { problem } : {}),
   }
 }
@@ -110,10 +147,17 @@ export interface PortfolioValue {
   unvalued: Valued[]
 }
 
+/**
+ * Totals over the rows that have both a value and a cost.
+ *
+ * Only those rows, on both sides: a cost counted against a market value that
+ * could not be computed would show as a total loss. What is left out is in
+ * `unvalued`, so the shortfall is visible rather than absorbed.
+ */
 export function summariseValues(rows: readonly Valued[]): PortfolioValue {
-  const valued = rows.filter((row) => row.marketValueKrw !== null)
+  const valued = rows.filter((row) => row.marketValueKrw !== null && row.costKrw !== null)
   const marketValueKrw = valued.reduce((sum, row) => sum + row.marketValueKrw!, 0)
-  const costKrw = valued.reduce((sum, row) => sum + row.costKrw, 0)
+  const costKrw = valued.reduce((sum, row) => sum + row.costKrw!, 0)
 
   return {
     rows: [...rows],
