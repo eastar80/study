@@ -250,12 +250,17 @@ export interface HoldingMismatch {
 }
 
 /**
- * The factor that turns a holding's 단가 into won.
+ * The factor that turns a holding's 단가 back into a per-share price **in that
+ * holding's own currency.**
  *
- * Not an exchange rate, though it first looked like one. 매입원가 is a **won**
- * column for every holding; 단가 is already converted but a yen row carries 100×,
- * because the sheet multiplies by a 원/100엔 rate without dividing by 100. So the
- * ratio between the two columns is a unit scale — 0.01 for yen, 1 elsewhere.
+ * Not an exchange rate, though it looked like one twice. 매입원가 is in the
+ * holding's own currency — dollars for a dollar holding, yen for a yen one — and
+ * so is 단가, except a yen row carries 100× because the sheet multiplies by a
+ * 원/100엔 rate without dividing by 100. So the ratio between the two columns is a
+ * unit scale within one currency: 0.01 for yen, 1 elsewhere.
+ *
+ * The ratio alone never said *which* currency the two columns share — only that
+ * they share one. That is how the unit got read wrong twice; see docs/06 §4.3.
  *
  * Read out of the sheet rather than hardcoded per currency: a currency added
  * later is then handled by the data instead of by a new branch.
@@ -265,9 +270,9 @@ export interface PriceScale {
   currency: CurrencyCode
   /** 수량 × 단가, as the sheet writes it. */
   raw: number
-  /** The sheet's 매입원가 column, in won. */
-  costKrw: number
-  /** costKrw ÷ raw. 1 means 단가 was already won at scale. */
+  /** The sheet's 매입원가 column, in the holding's own currency. */
+  costNative: number
+  /** costNative ÷ raw. 1 means 단가 was already a per-share price. */
   scale: number
 }
 
@@ -330,10 +335,11 @@ export function parseHoldingsInput(sheet: Sheet, sheetName = '입력정보'): Pa
     const dividend = columns.dividendPerShare === undefined ? null : numberAt(rows, r, columns.dividendPerShare)
 
     const raw = quantity * avgPrice
-    const costKrw = columns.cost === undefined ? null : numberAt(rows, r, columns.cost)
-    // The sheet's own won figure is the authority. Its ratio to 수량 × 단가 is the
-    // scale that turns 단가 into won — 0.01 for yen, 1 elsewhere.
-    const scale = costKrw !== null && raw !== 0 ? costKrw / raw : null
+    const costNative = columns.cost === undefined ? null : numberAt(rows, r, columns.cost)
+    // The sheet's own 매입원가 is the authority. Its ratio to 수량 × 단가 is the
+    // scale that turns 단가 into a per-share price in the same currency — 0.01 for
+    // yen, 1 elsewhere.
+    const scale = costNative !== null && raw !== 0 ? costNative / raw : null
 
     holdings.push({
       id: `h${holdings.length + 1}`,
@@ -343,7 +349,7 @@ export function parseHoldingsInput(sheet: Sheet, sheetName = '입력정보'): Pa
       ticker: columns.ticker === undefined ? '' : text(rows, r, columns.ticker),
       quantity,
       avgPrice,
-      ...(costKrw === null ? {} : { costKrw }),
+      ...(costNative === null ? {} : { costNative }),
       ...(scale === null ? {} : { priceScale: scale }),
       ...(dividend === null ? {} : { dividendPerShare: dividend }),
       style: columns.style === undefined ? '' : text(rows, r, columns.style),
@@ -352,19 +358,19 @@ export function parseHoldingsInput(sheet: Sheet, sheetName = '입력정보'): Pa
       currency,
     })
 
-    if (costKrw === null) {
+    if (costNative === null) {
       if (raw !== 0) costlessRows.push(name)
     } else if (raw !== 0) {
       if (currency === 'KRW') {
         // Won holdings are the one case where the identity is pure arithmetic, so
         // a disagreement means a misread column. A relative allowance covers
         // rounding on decimal prices.
-        const tolerance = Math.max(1, Math.abs(costKrw) * 1e-6)
-        if (Math.abs(raw - costKrw) > tolerance) {
-          mismatches.push({ name, ours: raw, sheet: costKrw, diff: raw - costKrw })
+        const tolerance = Math.max(1, Math.abs(costNative) * 1e-6)
+        if (Math.abs(raw - costNative) > tolerance) {
+          mismatches.push({ name, ours: raw, sheet: costNative, diff: raw - costNative })
         }
       } else {
-        priceScales.push({ name, currency, raw, costKrw, scale: scale! })
+        priceScales.push({ name, currency, raw, costNative, scale: scale! })
       }
     }
   }

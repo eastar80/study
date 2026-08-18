@@ -9,7 +9,7 @@ import {
   type PriceScale,
   type NavMismatch,
 } from '../lib/import/portfolioWorkbook'
-import { compositionAt } from '../lib/data/portfolio'
+import { dimensionKeys } from '../lib/data/portfolio'
 import type { Vault } from '../state/useVault'
 import { Alert, Badge, Button, Card, Muted } from '../ui/primitives'
 import { SectionTitle, Stat, readSheet, won } from './importShared'
@@ -111,11 +111,10 @@ export function ImportSecurities({
   const costMismatches = preview?.holdings?.mismatches ?? []
   const passes = preview?.navs != null && navMismatches.length === 0 && costMismatches.length === 0
 
+  // Just the distinct currencies, so no exchange rate is involved — this runs
+  // before any quote is fetched.
   const currencies = useMemo(
-    () =>
-      preview?.holdings
-        ? compositionAt(preview.holdings.holdings, 'currency').slices.map((slice) => slice.key)
-        : [],
+    () => (preview?.holdings ? dimensionKeys(preview.holdings.holdings, 'currency') : []),
     [preview],
   )
 
@@ -237,8 +236,9 @@ export function ImportSecurities({
                 <Alert tone="info">
                   외화 종목이 있습니다 ({currencies.join(' · ')}).{' '}
                   <strong>통화는 지역이 아니라 거래소로 정합니다</strong> — 미국 지수를 담아도 KRX에서
-                  거래되면 원화입니다. 통화는 시세를 어디서 조회할지를 정하는 값이고,{' '}
-                  <strong>금액은 모두 원화</strong>입니다.
+                  거래되면 원화입니다. 통화는 시세와 환율을 어디서 조회할지를 정하고,{' '}
+                  <strong>매입원가와 단가는 그 통화로 적힌 금액</strong>입니다 — 달러 종목은 달러, 엔화
+                  종목은 엔. 원화 환산은 화면에서 그날 환율로 합니다.
                 </Alert>
               )}
 
@@ -246,10 +246,10 @@ export function ImportSecurities({
                 <div>
                   <SectionTitle>단가 배율</SectionTitle>
                   <Muted>
-                    <strong>매입원가는 통화와 무관하게 원화 컬럼</strong>입니다. <code>단가</code> 도 이미
-                    환산된 값인데 엔화만 100배로 적혀 있어서(원/100엔 환율을 100으로 나누지 않은 값), 두
-                    컬럼의 비가 <strong>환율이 아니라 단위 배율</strong>이 됩니다. 그래서 불일치로 보지
-                    않고, 이 배율을 적용해 단가를 원화로 읽습니다.
+                    <strong>매입원가와 단가는 같은 통화</strong>인데, 엔화만 단가가 100배로 적혀
+                    있습니다(원/100엔 환율을 100으로 나누지 않은 값). 그래서 두 컬럼의 비가{' '}
+                    <strong>환율이 아니라 단위 배율</strong>이 됩니다. 불일치로 보지 않고, 이 배율을
+                    적용해 <code>단가 × 배율 = 주당 매입가(해당 통화)</code> 로 읽습니다.
                   </Muted>
                   <PriceScaleTable scales={preview.holdings.priceScales} />
                 </div>
@@ -257,7 +257,7 @@ export function ImportSecurities({
 
               {preview.holdings.costlessRows.length > 0 && (
                 <Alert tone="warn">
-                  다음 종목은 <strong>매입원가 칸이 비어</strong> 있어 원화 금액을 알 수 없습니다.{' '}
+                  다음 종목은 <strong>매입원가 칸이 비어</strong> 있어 매입 금액을 알 수 없습니다.{' '}
                   <code>수량 × 단가</code> 로 대신했는데, 엔화라면 100배 커집니다:{' '}
                   <strong>{preview.holdings.costlessRows.join(', ')}</strong>
                 </Alert>
@@ -365,7 +365,7 @@ function PriceScaleTable({ scales }: { scales: PriceScale[] }) {
       <table className="w-full min-w-[520px] text-sm">
         <thead>
           <tr className="border-b" style={{ borderColor: 'var(--line)' }}>
-            {['종목', '통화', '수량 × 단가', '매입원가 (원)', '배율'].map((label, index) => (
+            {['종목', '통화', '수량 × 단가', '매입원가 (해당 통화)', '배율'].map((label, index) => (
               <th
                 key={label}
                 scope="col"
@@ -382,7 +382,7 @@ function PriceScaleTable({ scales }: { scales: PriceScale[] }) {
               <td className="px-3 py-1.5">{scale.name}</td>
               <td className="px-3 py-1.5">{scale.currency}</td>
               <td className="tnum px-3 py-1.5 text-right">{won.format(Math.round(scale.raw))}</td>
-              <td className="tnum px-3 py-1.5 text-right">{won.format(Math.round(scale.costKrw))}</td>
+              <td className="tnum px-3 py-1.5 text-right">{won.format(Math.round(scale.costNative))}</td>
               <td className="tnum px-3 py-1.5 text-right">{digits.format(scale.scale)}</td>
             </tr>
           ))}

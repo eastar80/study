@@ -46,6 +46,29 @@ describe('toYahooSymbol', () => {
   it('treats an unlabelled exchange as carrying no suffix', () => {
     expect(toYahooSymbol('AAPL', '')).toEqual({ symbol: 'AAPL' })
   })
+
+  it('does not suffix a letter ticker, whatever the 거래소 cell says', () => {
+    // The observed case: `dgro`, `schd` and `o` are US listings held through a
+    // domestic broker, so the sheet's 거래소 reads KRX. `DGRO.KS` is a real KRX
+    // listing, so the lookup *succeeded* and returned another company's price —
+    // worse than failing, because nothing said anything was wrong.
+    expect(toYahooSymbol('dgro', 'KRX')).toEqual({ symbol: 'DGRO' })
+    expect(toYahooSymbol('schd', 'KRX')).toEqual({ symbol: 'SCHD' })
+    expect(toYahooSymbol('o', 'KRX')).toEqual({ symbol: 'O' })
+  })
+
+  it('still suffixes numeric codes, which is what those markets use', () => {
+    // KRX and KOSDAQ list by six digits, JPX by four. The shape is the signal.
+    expect(toYahooSymbol('069500', 'KRX')).toEqual({ symbol: '069500.KS' })
+    expect(toYahooSymbol('086520', 'kosdaq')).toEqual({ symbol: '086520.KQ' })
+    expect(toYahooSymbol('8058', 'JPX')).toEqual({ symbol: '8058.T' })
+  })
+
+  it('reports no problem for a letter ticker on a Korean exchange', () => {
+    // Reading it as a US symbol is a decision, not a failure — there is nothing
+    // for the reader to fix, and the symbol shows in the table either way.
+    expect(toYahooSymbol('dgro', 'KRX').problem).toBeUndefined()
+  })
 })
 
 describe('fxPairsFor', () => {

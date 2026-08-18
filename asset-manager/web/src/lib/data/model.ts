@@ -148,9 +148,10 @@ export type HoldingStyle = string
 /**
  * One position, from `입력정보`. A current snapshot, not a time series.
  *
- * Every money field here is **won**, whatever the market. The workbook's 단가
- * column is already converted, and its 매입원가 column is the authoritative won
- * cost — see `costKrw`.
+ * Money fields here are in the **holding's own currency**, not won — the
+ * workbook's 매입원가 column is a dollar amount for a dollar holding and a yen
+ * amount for a yen one. Converting to won happens at read time with the rate of
+ * the day, so `평가금액` and `매입원가(원)` are both derived, never stored.
  */
 export interface Holding {
   id: string
@@ -163,24 +164,31 @@ export interface Holding {
   ticker: string
   quantity: number
   /**
-   * The 단가 column verbatim. Already converted to won, but **not always at
-   * scale** — a yen holding carries 100× because the sheet multiplies by a
-   * 원/100엔 rate without dividing by 100. Multiply by `priceScale` for won.
+   * The 단가 column verbatim, which is **not** the price per share: a yen holding
+   * carries 100×. Multiply by `priceScale` to get the real per-share price.
    */
   avgPrice: number
   /**
-   * The sheet's 매입원가 column, in won. **This is the authoritative cost.**
+   * The sheet's 매입원가 column, **in this holding's own currency.**
    *
-   * Deriving it from 수량 × 단가 is what made yen holdings 100× too large. Absent
-   * when the sheet left the cell blank.
+   * The authoritative cost. Deriving it from 수량 × 단가 is what made yen holdings
+   * 100× too large. Absent when the sheet left the cell blank.
+   */
+  costNative?: number
+  /**
+   * Was `costNative` under a wrong name. Read for data written before the rename —
+   * the number was always the native amount, only the label was wrong.
+   *
+   * @deprecated
    */
   costKrw?: number
   /**
-   * 매입원가 ÷ (수량 × 단가) — the factor that turns 단가 into won. 0.01 for yen,
-   * 1 for everything else observed.
+   * 매입원가 ÷ (수량 × 단가) — the factor that turns 단가 back into a per-share
+   * price **in the holding's own currency.** 0.01 for yen, 1 for everything else
+   * observed.
    *
-   * Read back out of the sheet rather than hardcoded per currency, so a currency
-   * added later is handled by the data instead of by a new branch.
+   * Read out of the sheet rather than hardcoded per currency, so a currency added
+   * later is handled by the data instead of by a new branch.
    */
   priceScale?: number
   /** Per share, in the same units as avgPrice. */
@@ -192,8 +200,8 @@ export interface Holding {
   /** 거래소 — KRX · kosdaq · USD · JPX. */
   exchange: string
   /**
-   * The market this trades on, which decides **which quote and which FX rate to
-   * fetch** — not the unit of the amounts above, which are won.
+   * The market this trades on. It decides **which quote and which FX rate to
+   * fetch**, and it is also the unit of the money fields above.
    */
   currency: CurrencyCode
 }
@@ -213,6 +221,27 @@ export interface AssetData {
   portfolioNavs: PortfolioNav[]
   /** Current positions, from the securities workbook. */
   holdings: Holding[]
+  /** Hand-entered prices for holdings no quote source carries. */
+  priceOverrides: PriceOverride[]
+}
+
+/**
+ * A price the user typed in, for a holding no quote source covers — an unlisted
+ * company, a domestic public fund.
+ *
+ * Kept in the data like `ImportAdjustment`, so it survives a re-import, shows on
+ * screen, and can be removed. Addressed by 종목명 because an unlisted holding has
+ * no stable ticker, and the name is what the user sees.
+ *
+ * It beats a fetched quote. A hand-entered value silently overwritten by an
+ * automatic one gives no way to tell why it did not take.
+ */
+export interface PriceOverride {
+  /** 종목명, matched exactly. */
+  name: string
+  /** Per share, in the holding's own currency. */
+  price: number
+  note?: string
 }
 
 export function emptyData(): AssetData {
@@ -228,6 +257,7 @@ export function emptyData(): AssetData {
     importAdjustments: [],
     portfolioNavs: [],
     holdings: [],
+    priceOverrides: [],
   }
 }
 
@@ -252,5 +282,6 @@ export function normaliseData(raw: unknown): AssetData {
     importAdjustments: Array.isArray(input.importAdjustments) ? input.importAdjustments : [],
     portfolioNavs: Array.isArray(input.portfolioNavs) ? input.portfolioNavs : [],
     holdings: Array.isArray(input.holdings) ? input.holdings : [],
+    priceOverrides: Array.isArray(input.priceOverrides) ? input.priceOverrides : [],
   }
 }

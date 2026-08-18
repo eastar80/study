@@ -4,12 +4,14 @@
  * Like `dashboard.ts`, this stores nothing of its own — every figure is derived
  * from `portfolioNavs` and `holdings`, so it cannot drift from what was imported.
  *
- * Nothing here needs a live price. Current valuation and return per holding wait
- * for the quote relay; what the workbook already knows is the whole-portfolio
+ * Costs come out of the workbook in each holding's own currency, so anything that
+ * adds them across holdings takes an exchange-rate map. Live prices still belong
+ * to the quote relay; what the workbook already knows is the whole-portfolio
  * performance history and the composition at cost.
  */
 
-import type { Holding, PortfolioNav } from './model'
+import type { CurrencyCode, Holding, PortfolioNav } from './model'
+import { isCashLike, krwPerUnit } from '../quotes/valuation'
 
 export interface NavSummary {
   ym: string
@@ -84,18 +86,46 @@ export function indexToBase(values: readonly (number | null | undefined)[]): (nu
 }
 
 /**
- * Purchase cost of a position, in won.
+ * Purchase cost of a position, **in the holding's own currency** — dollars for a
+ * dollar holding, yen for a yen one.
  *
  * The sheet's own 매입원가 wins. Falling back to 수량 × 단가 is only for a blank
  * cell, and it is wrong for yen — the 단가 column carries 100× there — so the
  * importer reports those rows rather than letting the fallback pass unnoticed.
+ *
+ * Cash never reads 매입원가. Its 단가 cell holds an exchange rate rather than a
+ * price, so the two columns do not share a unit the way a stock's do. Cash also
+ * does not appreciate, which means cost and market value are the same number, so
+ * `수량 × 1` is right for both without knowing anything about 매입원가.
  */
 export function costOf(holding: Holding): number {
-  return holding.costKrw ?? holding.quantity * holding.avgPrice
+  if (isCashLike(holding)) return holding.quantity
+  return holding.costNative ?? holding.costKrw ?? holding.quantity * holding.avgPrice
 }
 
-/** Average price in won. The 단가 column needs its scale applied first. */
-export function avgPriceKrw(holding: Holding): number {
+/**
+ * Purchase cost in won, at today's rate. Null when the rate is missing.
+ *
+ * Null rather than 0: a cost silently dropped from a total shrinks the total
+ * without saying so, and one converted at a made-up rate of 1 is worse.
+ */
+export function costKrwOf(
+  holding: Holding,
+  rates: ReadonlyMap<CurrencyCode, number>,
+): number | null {
+  const rate = krwPerUnit(holding.currency, rates)
+  return rate === null ? null : costOf(holding) * rate
+}
+
+/**
+ * Purchase price per share, **in the holding's own currency** — the 단가 column
+ * with its scale applied, which is what undoes the yen 100×.
+ *
+ * Cash is one unit of its own currency, matching its current price. Its 단가 is an
+ * exchange rate, and showing that in a price column would read as a share price.
+ */
+export function avgPriceNative(holding: Holding): number {
+  if (isCashLike(holding)) return 1
   return holding.avgPrice * (holding.priceScale ?? 1)
 }
 
@@ -114,26 +144,45 @@ export function byOwner(holdings: readonly Holding[], owner: string | null): Hol
 
 export interface CostSlice {
   key: string
+  /** Won. */
   cost: number
   /** Fraction of the total, 0–1. */
   share: number
 }
 
+export interface Composition {
+  /** Won, over the holdings that could be converted. */
+  total: number
+  slices: CostSlice[]
+  /**
+   * Holdings left out because their currency had no rate, by name. A composition
+   * that quietly drops a position redraws every share without saying why.
+   */
+  unconverted: string[]
+}
+
 /**
- * Composition at cost, by any of the holding's dimensions.
+ * Composition at cost in won, by any of the holding's dimensions.
  *
- * One bar, because **every cost here is won.** This used to split by currency, on
- * the mistaken belief that costs were in each holding's own currency and could
- * not be added without an exchange rate. The sheet had already converted them.
+ * One bar on one scale, so the shares mean something — which needs every cost in
+ * the same unit, and the costs come out of the sheet in each holding's own
+ * currency. Converting needs today's rate; a holding whose rate is missing is
+ * reported rather than added as 0.
  */
 export function compositionAt(
   holdings: readonly Holding[],
   dimension: 'style' | 'region' | 'currency' | 'account' | 'owner',
-): { total: number; slices: CostSlice[] } {
+  rates: ReadonlyMap<CurrencyCode, number>,
+): Composition {
   const byKey = new Map<string, number>()
+  const unconverted: string[] = []
 
   for (const holding of holdings) {
-    const cost = costOf(holding)
+    const cost = costKrwOf(holding, rates)
+    if (cost === null) {
+      if (costOf(holding) !== 0) unconverted.push(holding.name)
+      continue
+    }
     if (cost === 0) continue
     const key = holding[dimension] === '' ? '미분류' : String(holding[dimension])
     byKey.set(key, (byKey.get(key) ?? 0) + cost)
@@ -145,6 +194,7 @@ export function compositionAt(
     slices: [...byKey.entries()]
       .map(([key, cost]) => ({ key, cost, share: total === 0 ? 0 : cost / total }))
       .sort((a, b) => b.cost - a.cost),
+    unconverted,
   }
 }
 
