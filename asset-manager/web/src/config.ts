@@ -15,6 +15,7 @@
 
 const LS_CLIENT_ID = 'am.google.clientId'
 const LS_API_KEY = 'am.google.apiKey'
+const LS_QUOTE_PROXY = 'am.quotes.proxyUrl'
 
 /** The only scope this app ever requests. */
 export const DRIVE_FILE_SCOPE = 'https://www.googleapis.com/auth/drive.file'
@@ -56,6 +57,46 @@ export function getProjectNumber(clientId: string = getClientId()): string {
 export function setCredentials(clientId: string, apiKey: string): void {
   localStorage.setItem(LS_CLIENT_ID, clientId.trim())
   localStorage.setItem(LS_API_KEY, apiKey.trim())
+}
+
+/**
+ * The Apps Script web-app URL that relays quotes and FX. See docs/07.
+ *
+ * Kept out of the repository deliberately. It is not a secret in the sense of
+ * granting access to anything — only symbols travel through it, never holdings
+ * or amounts — but a URL that anyone can call to spend the owner's Apps Script
+ * quota does not belong in public source.
+ */
+export function getQuoteProxyUrl(): string {
+  return (
+    envValue(import.meta.env.VITE_QUOTE_PROXY_URL) ||
+    localStorage.getItem(LS_QUOTE_PROXY)?.trim() ||
+    ''
+  )
+}
+
+export function setQuoteProxyUrl(url: string): void {
+  localStorage.setItem(LS_QUOTE_PROXY, url.trim())
+}
+
+export function hasQuoteProxy(): boolean {
+  return getQuoteProxyUrl() !== ''
+}
+
+/** Catches the two things people paste by mistake. */
+export function describeProxyProblem(url: string): string | null {
+  const trimmed = url.trim()
+  if (trimmed === '') return null
+  if (!/^https:\/\//.test(trimmed)) return 'https:// 로 시작하는 주소여야 합니다.'
+  if (!trimmed.includes('script.google.com')) {
+    return 'Apps Script 웹 앱 주소가 아닌 것 같습니다. script.google.com 주소인지 확인하세요.'
+  }
+  if (!trimmed.endsWith('/exec')) {
+    // /dev is the editor-only URL and requires a signed-in session, so it
+    // returns HTML instead of JSON when the app calls it.
+    return '주소가 "/exec" 로 끝나야 합니다. "/dev" 주소는 편집자만 열 수 있어 앱에서는 동작하지 않습니다.'
+  }
+  return null
 }
 
 export function clearCredentials(): void {
