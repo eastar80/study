@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
+  avgPriceKrw,
   byOwner,
-  compositionByCurrency,
+  compositionAt,
   costOf,
   dimensionKeys,
   indexToBase,
@@ -155,65 +156,76 @@ describe('owners and filtering', () => {
   })
 })
 
-describe('compositionByCurrency', () => {
+describe('compositionAt', () => {
   const mixed = [
-    holding({ id: 'h1', style: '성장', currency: 'KRW', quantity: 10, avgPrice: 30000 }),
-    holding({ id: 'h2', style: '배당', currency: 'KRW', quantity: 10, avgPrice: 10000 }),
-    holding({ id: 'h3', style: '성장', currency: 'USD', quantity: 5, avgPrice: 200 }),
-    holding({ id: 'h4', style: '배당', currency: 'JPY', quantity: 100, avgPrice: 2500 }),
+    holding({ id: 'h1', style: '성장', currency: 'KRW', quantity: 10, avgPrice: 30000, costKrw: 300_000 }),
+    holding({ id: 'h2', style: '배당', currency: 'KRW', quantity: 10, avgPrice: 10000, costKrw: 100_000 }),
+    holding({ id: 'h3', style: '성장', currency: 'USD', quantity: 5, avgPrice: 280_000, costKrw: 1_400_000 }),
+    // Yen: 단가 carries 100×, so only costKrw is right.
+    holding({
+      id: 'h4',
+      style: '배당',
+      currency: 'JPY',
+      quantity: 400,
+      avgPrice: 2_500_000,
+      costKrw: 10_000_000,
+      priceScale: 0.01,
+    }),
   ]
 
-  it('never adds costs across currencies', () => {
-    // There is no exchange rate yet, and inventing one would put a made-up
-    // number in the middle of a chart.
-    const groups = compositionByCurrency(mixed, 'style')
-    expect(groups.map((g) => g.currency)).toEqual(['KRW', 'USD', 'JPY'])
-    expect(groups.map((g) => g.total)).toEqual([400000, 1000, 250000])
+  it('adds every currency together, because the costs are all won', () => {
+    // This used to split by currency, on the mistaken belief that costs were in
+    // each holding's own currency and needed a rate before they could be summed.
+    const { total, slices } = compositionAt(mixed, 'style')
+    expect(total).toBe(11_800_000)
+    expect(slices.map((slice) => slice.key)).toEqual(['배당', '성장'])
+    expect(slices[0]!.cost).toBe(10_100_000)
+    expect(slices.reduce((sum, slice) => sum + slice.share, 0)).toBeCloseTo(1)
   })
 
-  it('shares are within a currency, so each bar fills', () => {
-    const krw = compositionByCurrency(mixed, 'style')[0]!
-    expect(krw.slices.map((s) => s.key)).toEqual(['성장', '배당'])
-    expect(krw.slices[0]!.share).toBeCloseTo(0.75)
-    expect(krw.slices.reduce((sum, s) => sum + s.share, 0)).toBeCloseTo(1)
+  it('groups by currency with the same function', () => {
+    const { slices } = compositionAt(mixed, 'currency')
+    expect(slices.map((slice) => slice.key)).toEqual(['JPY', 'USD', 'KRW'])
+    expect(slices.find((slice) => slice.key === 'JPY')!.cost).toBe(10_000_000)
   })
 
-  it('puts won first, whatever the amounts', () => {
-    const wonLast = [
-      holding({ id: 'h1', currency: 'USD', quantity: 1000, avgPrice: 1000 }),
-      holding({ id: 'h2', currency: 'KRW', quantity: 1, avgPrice: 1 }),
-    ]
-    expect(compositionByCurrency(wonLast, 'style')[0]!.currency).toBe('KRW')
-  })
-
-  it('collapses to one ordinary bar when everything is won', () => {
-    const groups = compositionByCurrency([mixed[0]!, mixed[1]!], 'style')
-    expect(groups).toHaveLength(1)
-    expect(groups[0]!.currency).toBe('KRW')
-  })
-
-  it('groups by region as readily as by style', () => {
-    const groups = compositionByCurrency(
-      [holding({ id: 'h1', region: '국내' }), holding({ id: 'h2', region: '미국' })],
-      'region',
-    )
-    expect(groups[0]!.slices.map((s) => s.key).sort()).toEqual(['국내', '미국'])
+  it('groups by region, account and owner too', () => {
+    expect(compositionAt(mixed, 'region').slices[0]!.key).toBe('국내')
+    expect(compositionAt(mixed, 'account').slices[0]!.key).toBe('유안타주식')
+    expect(compositionAt(mixed, 'owner').slices[0]!.key).toBe('호빵')
   })
 
   it('labels a blank classification rather than dropping the holding', () => {
-    const groups = compositionByCurrency([holding({ style: '' })], 'style')
-    expect(groups[0]!.slices[0]!.key).toBe('미분류')
+    expect(compositionAt([holding({ style: '', costKrw: 1000 })], 'style').slices[0]!.key).toBe('미분류')
   })
 
   it('leaves out a position with no cost, which would be a zero-width segment', () => {
-    expect(compositionByCurrency([holding({ quantity: 0 })], 'style')).toEqual([])
+    expect(compositionAt([holding({ quantity: 0, avgPrice: 0 })], 'style').slices).toEqual([])
   })
 })
 
-describe('costOf and dimensionKeys', () => {
-  it('multiplies quantity by average price', () => {
+describe('costOf', () => {
+  it('takes the sheet\'s own won figure when it has one', () => {
+    // 수량 × 단가 would be 100× for a yen holding, so the sheet wins.
+    expect(costOf(holding({ quantity: 400, avgPrice: 2_500_000, costKrw: 10_000_000 }))).toBe(10_000_000)
+  })
+
+  it('falls back to quantity times price when the cell was blank', () => {
     expect(costOf(holding({ quantity: 10, avgPrice: 30000 }))).toBe(300000)
   })
+})
+
+describe('avgPriceKrw', () => {
+  it('applies the scale, so a yen 단가 reads as won', () => {
+    expect(avgPriceKrw(holding({ avgPrice: 2_500_000, priceScale: 0.01 }))).toBe(25_000)
+  })
+
+  it('leaves a price alone when there is no scale', () => {
+    expect(avgPriceKrw(holding({ avgPrice: 30_000 }))).toBe(30_000)
+  })
+})
+
+describe('dimensionKeys', () => {
 
   it('lists dimension values across every holding, so colours stay put', () => {
     // Taken from all holdings, not the visible ones: an owner filter must not

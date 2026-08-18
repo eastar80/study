@@ -250,22 +250,25 @@ export interface HoldingMismatch {
 }
 
 /**
- * The rate the sheet used to convert a foreign holding's cost into won.
+ * The factor that turns a holding's 단가 into won.
  *
- * For a foreign position the 매입원가 column is not 수량 × 단가 — it is that
- * converted, so the ratio between them is the rate. A yen rate can be written
- * either as 원/엔 or 원/100엔, and the two differ by exactly 100×, which is what
- * made this look like an error at first.
+ * Not an exchange rate, though it first looked like one. 매입원가 is a **won**
+ * column for every holding; 단가 is already converted but a yen row carries 100×,
+ * because the sheet multiplies by a 원/100엔 rate without dividing by 100. So the
+ * ratio between the two columns is a unit scale — 0.01 for yen, 1 elsewhere.
+ *
+ * Read out of the sheet rather than hardcoded per currency: a currency added
+ * later is then handled by the data instead of by a new branch.
  */
-export interface ImpliedRate {
+export interface PriceScale {
   name: string
   currency: CurrencyCode
-  /** 수량 × 단가, in the holding's own currency. */
-  cost: number
-  /** The sheet's 매입원가 column. */
-  sheet: number
-  /** sheet ÷ cost. Near 1 means the column was already in that currency. */
-  rate: number
+  /** 수량 × 단가, as the sheet writes it. */
+  raw: number
+  /** The sheet's 매입원가 column, in won. */
+  costKrw: number
+  /** costKrw ÷ raw. 1 means 단가 was already won at scale. */
+  scale: number
 }
 
 export interface ParsedHoldings2 {
@@ -275,8 +278,14 @@ export interface ParsedHoldings2 {
    * Arithmetic, so a disagreement means a column was misread.
    */
   mismatches: HoldingMismatch[]
-  /** Conversion rates read back out of the foreign holdings' 매입원가. */
-  impliedRates: ImpliedRate[]
+  /** Unit scales read back out of the 매입원가 column. */
+  priceScales: PriceScale[]
+  /**
+   * Positions whose 매입원가 cell was blank, so the won cost is unknown and
+   * 수량 × 단가 had to stand in. Surfaced because doing that silently is exactly
+   * how the yen amounts came out 100× too large.
+   */
+  costlessRows: string[]
   /** Rows that had no 종목 name and so could not be a position. */
   skippedRows: number
 }
@@ -303,7 +312,8 @@ export function parseHoldingsInput(sheet: Sheet, sheetName = '입력정보'): Pa
 
   const holdings: Holding[] = []
   const mismatches: HoldingMismatch[] = []
-  const impliedRates: ImpliedRate[] = []
+  const priceScales: PriceScale[] = []
+  const costlessRows: string[] = []
   let skippedRows = 0
 
   for (let r = headerRow + 1; r < rows.length; r++) {
@@ -316,7 +326,14 @@ export function parseHoldingsInput(sheet: Sheet, sheetName = '입력정보'): Pa
     const quantity = numberAt(rows, r, quantityCol) ?? 0
     const avgPrice = numberAt(rows, r, priceCol) ?? 0
     const exchange = exchangeCol === undefined ? '' : text(rows, r, exchangeCol)
+    const currency = currencyOfExchange(exchange)
     const dividend = columns.dividendPerShare === undefined ? null : numberAt(rows, r, columns.dividendPerShare)
+
+    const raw = quantity * avgPrice
+    const costKrw = columns.cost === undefined ? null : numberAt(rows, r, columns.cost)
+    // The sheet's own won figure is the authority. Its ratio to 수량 × 단가 is the
+    // scale that turns 단가 into won — 0.01 for yen, 1 elsewhere.
+    const scale = costKrw !== null && raw !== 0 ? costKrw / raw : null
 
     holdings.push({
       id: `h${holdings.length + 1}`,
@@ -326,36 +343,33 @@ export function parseHoldingsInput(sheet: Sheet, sheetName = '입력정보'): Pa
       ticker: columns.ticker === undefined ? '' : text(rows, r, columns.ticker),
       quantity,
       avgPrice,
+      ...(costKrw === null ? {} : { costKrw }),
+      ...(scale === null ? {} : { priceScale: scale }),
       ...(dividend === null ? {} : { dividendPerShare: dividend }),
       style: columns.style === undefined ? '' : text(rows, r, columns.style),
       region: columns.region === undefined ? '' : text(rows, r, columns.region),
       exchange,
-      currency: currencyOfExchange(exchange),
+      currency,
     })
 
-    if (columns.cost !== undefined) {
-      const sheetValue = numberAt(rows, r, columns.cost)
-      const ours = quantity * avgPrice
-      const currency = currencyOfExchange(exchange)
-
-      if (sheetValue !== null && ours !== 0) {
-        if (currency === 'KRW') {
-          // Pure arithmetic for a won holding, so a disagreement is a misread
-          // column. A relative allowance covers rounding on decimal prices.
-          const tolerance = Math.max(1, Math.abs(sheetValue) * 1e-6)
-          if (Math.abs(ours - sheetValue) > tolerance) {
-            mismatches.push({ name, ours, sheet: sheetValue, diff: ours - sheetValue })
-          }
-        } else {
-          // For a foreign holding the column is converted to won, so the ratio
-          // is the rate the sheet used — information, not an error.
-          impliedRates.push({ name, currency, cost: ours, sheet: sheetValue, rate: sheetValue / ours })
+    if (costKrw === null) {
+      if (raw !== 0) costlessRows.push(name)
+    } else if (raw !== 0) {
+      if (currency === 'KRW') {
+        // Won holdings are the one case where the identity is pure arithmetic, so
+        // a disagreement means a misread column. A relative allowance covers
+        // rounding on decimal prices.
+        const tolerance = Math.max(1, Math.abs(costKrw) * 1e-6)
+        if (Math.abs(raw - costKrw) > tolerance) {
+          mismatches.push({ name, ours: raw, sheet: costKrw, diff: raw - costKrw })
         }
+      } else {
+        priceScales.push({ name, currency, raw, costKrw, scale: scale! })
       }
     }
   }
 
-  return { holdings, mismatches, impliedRates, skippedRows }
+  return { holdings, mismatches, priceScales, costlessRows, skippedRows }
 }
 
 function monthIndex(ym: YearMonth): number {

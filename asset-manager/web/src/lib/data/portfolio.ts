@@ -9,7 +9,7 @@
  * performance history and the composition at cost.
  */
 
-import type { CurrencyCode, Holding, PortfolioNav } from './model'
+import type { Holding, PortfolioNav } from './model'
 
 export interface NavSummary {
   ym: string
@@ -83,9 +83,20 @@ export function indexToBase(values: readonly (number | null | undefined)[]): (nu
   return values.map((value) => (typeof value === 'number' ? (value / base) * 100 : null))
 }
 
-/** Purchase cost of a position, in its own currency. */
+/**
+ * Purchase cost of a position, in won.
+ *
+ * The sheet's own 매입원가 wins. Falling back to 수량 × 단가 is only for a blank
+ * cell, and it is wrong for yen — the 단가 column carries 100× there — so the
+ * importer reports those rows rather than letting the fallback pass unnoticed.
+ */
 export function costOf(holding: Holding): number {
-  return holding.quantity * holding.avgPrice
+  return holding.costKrw ?? holding.quantity * holding.avgPrice
+}
+
+/** Average price in won. The 단가 column needs its scale applied first. */
+export function avgPriceKrw(holding: Holding): number {
+  return holding.avgPrice * (holding.priceScale ?? 1)
 }
 
 /** Account owners present, in first-seen order. 계좌주 filtering is optional. */
@@ -104,67 +115,47 @@ export function byOwner(holdings: readonly Holding[], owner: string | null): Hol
 export interface CostSlice {
   key: string
   cost: number
-  /** Fraction of this currency's total, 0–1. */
+  /** Fraction of the total, 0–1. */
   share: number
 }
 
-export interface CurrencyGroup {
-  currency: CurrencyCode
-  total: number
-  slices: CostSlice[]
-}
-
-const CURRENCY_ORDER: CurrencyCode[] = ['KRW', 'USD', 'JPY', 'EUR', 'GBP', 'CNY']
-
 /**
- * Composition at cost, grouped by currency.
+ * Composition at cost, by any of the holding's dimensions.
  *
- * Costs are in each holding's own currency and there is no exchange rate yet, so
- * they are never added across currencies — an invented rate would be a made-up
- * number sitting in the middle of a chart. One bar per currency says the same
- * thing truthfully, and collapses to a single ordinary bar when everything is won.
+ * One bar, because **every cost here is won.** This used to split by currency, on
+ * the mistaken belief that costs were in each holding's own currency and could
+ * not be added without an exchange rate. The sheet had already converted them.
  */
-export function compositionByCurrency(
+export function compositionAt(
   holdings: readonly Holding[],
-  dimension: 'style' | 'region',
-): CurrencyGroup[] {
-  const byCurrency = new Map<CurrencyCode, Map<string, number>>()
+  dimension: 'style' | 'region' | 'currency' | 'account' | 'owner',
+): { total: number; slices: CostSlice[] } {
+  const byKey = new Map<string, number>()
 
   for (const holding of holdings) {
     const cost = costOf(holding)
     if (cost === 0) continue
-
-    const slices = byCurrency.get(holding.currency) ?? new Map<string, number>()
-    const key = holding[dimension] === '' ? '미분류' : holding[dimension]
-    slices.set(key, (slices.get(key) ?? 0) + cost)
-    byCurrency.set(holding.currency, slices)
+    const key = holding[dimension] === '' ? '미분류' : String(holding[dimension])
+    byKey.set(key, (byKey.get(key) ?? 0) + cost)
   }
 
-  return [...byCurrency.entries()]
-    .map(([currency, slices]) => {
-      const total = [...slices.values()].reduce((sum, cost) => sum + cost, 0)
-      return {
-        currency,
-        total,
-        slices: [...slices.entries()]
-          .map(([key, cost]) => ({ key, cost, share: total === 0 ? 0 : cost / total }))
-          .sort((a, b) => b.cost - a.cost),
-      }
-    })
-    .sort((a, b) => {
-      const order = CURRENCY_ORDER.indexOf(a.currency) - CURRENCY_ORDER.indexOf(b.currency)
-      return order !== 0 ? order : b.total - a.total
-    })
+  const total = [...byKey.values()].reduce((sum, cost) => sum + cost, 0)
+  return {
+    total,
+    slices: [...byKey.entries()]
+      .map(([key, cost]) => ({ key, cost, share: total === 0 ? 0 : cost / total }))
+      .sort((a, b) => b.cost - a.cost),
+  }
 }
 
 /** Distinct values of a dimension across all holdings, for stable colour slots. */
 export function dimensionKeys(
   holdings: readonly Holding[],
-  dimension: 'style' | 'region',
+  dimension: 'style' | 'region' | 'currency' | 'account' | 'owner',
 ): string[] {
   const seen: string[] = []
   for (const holding of holdings) {
-    const key = holding[dimension] === '' ? '미분류' : holding[dimension]
+    const key = holding[dimension] === '' ? '미분류' : String(holding[dimension])
     if (!seen.includes(key)) seen.push(key)
   }
   return seen.sort()

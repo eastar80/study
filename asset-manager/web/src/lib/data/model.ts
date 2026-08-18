@@ -148,9 +148,9 @@ export type HoldingStyle = string
 /**
  * One position, from `입력정보`. A current snapshot, not a time series.
  *
- * `currency` is derived from the exchange, never from the region: tiger
- * 미국나스닥100 is US-exposed but trades on KRX and settles in won. Mixing the
- * two would misconvert every foreign-exposed domestic ETF.
+ * Every money field here is **won**, whatever the market. The workbook's 단가
+ * column is already converted, and its 매입원가 column is the authoritative won
+ * cost — see `costKrw`.
  */
 export interface Holding {
   id: string
@@ -162,9 +162,28 @@ export interface Holding {
   /** As written in the sheet; spellings differ by quote source. */
   ticker: string
   quantity: number
-  /** Average purchase price, in `currency`. */
+  /**
+   * The 단가 column verbatim. Already converted to won, but **not always at
+   * scale** — a yen holding carries 100× because the sheet multiplies by a
+   * 원/100엔 rate without dividing by 100. Multiply by `priceScale` for won.
+   */
   avgPrice: number
-  /** Per share, in `currency`. */
+  /**
+   * The sheet's 매입원가 column, in won. **This is the authoritative cost.**
+   *
+   * Deriving it from 수량 × 단가 is what made yen holdings 100× too large. Absent
+   * when the sheet left the cell blank.
+   */
+  costKrw?: number
+  /**
+   * 매입원가 ÷ (수량 × 단가) — the factor that turns 단가 into won. 0.01 for yen,
+   * 1 for everything else observed.
+   *
+   * Read back out of the sheet rather than hardcoded per currency, so a currency
+   * added later is handled by the data instead of by a new branch.
+   */
+  priceScale?: number
+  /** Per share, in the same units as avgPrice. */
   dividendPerShare?: number
   /** 구분 — the axis this user manages by. */
   style: HoldingStyle
@@ -172,6 +191,10 @@ export interface Holding {
   region: string
   /** 거래소 — KRX · kosdaq · USD · JPX. */
   exchange: string
+  /**
+   * The market this trades on, which decides **which quote and which FX rate to
+   * fetch** — not the unit of the amounts above, which are won.
+   */
   currency: CurrencyCode
 }
 
