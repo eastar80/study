@@ -3,6 +3,7 @@ import type { Sheet } from '../google/sheets'
 import {
   SheetShapeError,
   currencyOfExchange,
+  missingMonths,
   parseHoldingsInput,
   parseNavSheet,
 } from './portfolioWorkbook'
@@ -123,6 +124,15 @@ describe('parseNavSheet', () => {
     expect(() => parseNavSheet(sheet)).toThrow('입출금')
   })
 
+  it('reports no gaps for a contiguous run', () => {
+    expect(parseNavSheet(navSheet(navRows())).gaps).toEqual([])
+  })
+
+  it('names a month missing from the middle', () => {
+    const [first, , third] = navRows()
+    expect(parseNavSheet(navSheet([first!, third!])).gaps).toEqual(['2011-06'])
+  })
+
   it('sorts by month regardless of row order', () => {
     const [first, second, third] = navRows()
     const { navs } = parseNavSheet(navSheet([third!, first!, second!]))
@@ -203,15 +213,62 @@ describe('parseHoldingsInput', () => {
     expect(holdings.find((h) => h.name === '미쓰비시상사')!.currency).toBe('JPY')
   })
 
-  it('agrees with the sheet on 수량 × 단가', () => {
+  it('agrees with the sheet on 수량 × 단가 for won holdings', () => {
     expect(parseHoldingsInput(holdingsSheet(holdingRows())).mismatches).toEqual([])
   })
 
-  it('reports a row whose cost does not match quantity times price', () => {
+  it('reports a won row whose cost does not match quantity times price', () => {
     const rows = holdingRows()
     rows[0]![10] = 1
     const { mismatches } = parseHoldingsInput(holdingsSheet(rows))
     expect(mismatches).toEqual([{ name: 'kodex 200', ours: 300000, sheet: 1, diff: 299999 }])
+  })
+
+  it('does not call a converted foreign cost a mismatch', () => {
+    // 매입원가 for a foreign holding is that cost converted to won, so it is
+    // never 수량 × 단가. Treating it as one blocked the whole import.
+    const rows = holdingRows()
+    // 400 × 2,500 = 1,000,000 yen, recorded as 784,083 won.
+    rows[2]![5] = 400
+    rows[2]![10] = 784083
+    const { mismatches, impliedRates } = parseHoldingsInput(holdingsSheet(rows))
+
+    expect(mismatches).toEqual([])
+    const yen = impliedRates.find((rate) => rate.currency === 'JPY')!
+    expect(yen.name).toBe('미쓰비시상사')
+    expect(yen.cost).toBe(1_000_000)
+    expect(yen.sheet).toBe(784083)
+    expect(yen.rate).toBeCloseTo(0.784083)
+  })
+
+  it('reads the rate back whichever way the sheet writes it', () => {
+    // 원/엔 and 원/100엔 differ by exactly 100×, which is what made this look
+    // like an error. Either convention is reported, not judged.
+    const rows = holdingRows()
+    rows[2]![5] = 400
+    rows[2]![10] = 78_408_300
+    const hundredFold = parseHoldingsInput(holdingsSheet(rows)).impliedRates.find(
+      (rate) => rate.currency === 'JPY',
+    )!
+    expect(hundredFold.rate).toBeCloseTo(78.4083)
+  })
+
+  it('reports a rate near 1 when the column is already in that currency', () => {
+    const rows = holdingRows()
+    rows[2]![5] = 400
+    rows[2]![10] = 1_000_000
+    const yen = parseHoldingsInput(holdingsSheet(rows)).impliedRates.find(
+      (rate) => rate.currency === 'JPY',
+    )!
+    expect(yen.rate).toBeCloseTo(1)
+  })
+
+  it('tolerates rounding on a decimal price rather than crying mismatch', () => {
+    // Tesla at 214.3 × 5 = 1071.5; a sheet rounding to 1071 is not an error.
+    const rows = holdingRows()
+    rows[1]![6] = 214.3
+    rows[1]![10] = 1071
+    expect(parseHoldingsInput(holdingsSheet(rows)).mismatches).toEqual([])
   })
 
   it('skips rows with no 종목 name', () => {
@@ -231,5 +288,41 @@ describe('parseHoldingsInput', () => {
   it('names the column it could not find', () => {
     const sheet = sheetOf([['계좌주', '계좌'], ['호빵', '유안타주식']])
     expect(() => parseHoldingsInput(sheet)).toThrow('종목')
+  })
+})
+
+describe('missingMonths', () => {
+  it('finds a single gap', () => {
+    expect(missingMonths(['2011-05', '2011-07'])).toEqual(['2011-06'])
+  })
+
+  it('finds a run of gaps and crosses the year boundary', () => {
+    expect(missingMonths(['2011-11', '2012-02'])).toEqual(['2011-12', '2012-01'])
+  })
+
+  it('is empty for a contiguous run', () => {
+    expect(missingMonths(['2011-05', '2011-06', '2011-07'])).toEqual([])
+  })
+
+  it('does not care about input order', () => {
+    expect(missingMonths(['2011-07', '2011-05'])).toEqual(['2011-06'])
+  })
+
+  it('has nothing to say about fewer than two months', () => {
+    expect(missingMonths([])).toEqual([])
+    expect(missingMonths(['2011-05'])).toEqual([])
+  })
+
+  it('reports nothing for the real range, which is 184 months', () => {
+    // 2011-05 through 2026-08 inclusive is 184 months, not 185 — the count
+    // follows from the range, so a complete run is not evidence of a drop.
+    const months: string[] = []
+    for (let index = 2011 * 12 + 4; index <= 2026 * 12 + 7; index++) {
+      months.push(`${Math.floor(index / 12)}-${String((index % 12) + 1).padStart(2, '0')}`)
+    }
+    expect(months).toHaveLength(184)
+    expect(months[0]).toBe('2011-05')
+    expect(months.at(-1)).toBe('2026-08')
+    expect(missingMonths(months)).toEqual([])
   })
 })

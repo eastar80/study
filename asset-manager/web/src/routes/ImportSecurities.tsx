@@ -6,6 +6,7 @@ import {
   parseHoldingsInput,
   parseNavSheet,
   type HoldingMismatch,
+  type ImpliedRate,
   type NavMismatch,
 } from '../lib/import/portfolioWorkbook'
 import { compositionByCurrency } from '../lib/data/portfolio'
@@ -151,7 +152,6 @@ export function ImportSecurities({
         <>
           <Card title="가져올 내용">
             <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm md:grid-cols-4">
-              <Stat label="월별 성과" value={`${won.format(preview.navs.navs.length)}개월`} />
               <Stat
                 label="기간"
                 value={
@@ -160,6 +160,7 @@ export function ImportSecurities({
                     : '—'
                 }
               />
+              <Stat label="월 수" value={`${preview.navs.navs.length}개월`} />
               <Stat label="보유 종목" value={`${preview.holdings.holdings.length}개`} />
               <Stat
                 label="통화"
@@ -206,6 +207,22 @@ export function ImportSecurities({
                 </>
               )}
 
+              {/* Without this, a month count on its own leaves the reader
+                  guessing whether one was dropped. */}
+              {preview.navs.gaps.length === 0 ? (
+                <Muted>
+                  {preview.navs.firstYm} ~ {preview.navs.lastYm} 사이에 빠진 달이 없습니다. 그 구간이 곧{' '}
+                  {preview.navs.navs.length}개월이므로 <strong>빠진 달은 없습니다.</strong>
+                </Muted>
+              ) : (
+                <Alert tone="warn">
+                  {preview.navs.firstYm} ~ {preview.navs.lastYm} 사이에{' '}
+                  <strong>{preview.navs.gaps.length}개월</strong>이 비어 있습니다:{' '}
+                  {preview.navs.gaps.slice(0, 12).join(', ')}
+                  {preview.navs.gaps.length > 12 ? ' …' : ''}
+                </Alert>
+              )}
+
               {(preview.navs.skippedRows > 0 || preview.holdings.skippedRows > 0) && (
                 <Alert tone="warn">
                   값은 있는데 날짜나 종목명이 없어 건너뛴 행이 있습니다 — {NAV_SHEET}{' '}
@@ -219,6 +236,22 @@ export function ImportSecurities({
                   <strong>통화는 지역이 아니라 거래소로 정합니다</strong> — 미국 지수를 담아도 KRX에서
                   거래되면 원화입니다. 환율이 아직 없어 통화가 다른 금액은 합치지 않습니다.
                 </Alert>
+              )}
+
+              {preview.holdings.impliedRates.length > 0 && (
+                <div>
+                  <SectionTitle>시트가 쓴 환율</SectionTitle>
+                  <Muted>
+                    외화 종목의 <strong>매입원가</strong> 는 <code>수량 × 단가</code> 가 아니라 그것을
+                    환산한 값이라, 두 값의 비가 곧 시트가 쓴 환율입니다. 그래서 이 항목들은 불일치로
+                    보지 않습니다. 1에 가까우면 그 통화로 적힌 것입니다.
+                  </Muted>
+                  <ImpliedRateTable rates={preview.holdings.impliedRates} />
+                  <Muted>
+                    엔화는 <strong>원/엔</strong> 과 <strong>원/100엔</strong> 표기가 정확히 100배
+                    다릅니다. 시세 연동을 붙일 때 이 값이 기준이 됩니다.
+                  </Muted>
+                </div>
               )}
             </div>
           </Card>
@@ -308,6 +341,40 @@ function CostMismatchTable({ mismatches }: { mismatches: HoldingMismatch[] }) {
               <td className="tnum px-3 py-1.5 text-right">{won.format(Math.round(mismatch.ours))}</td>
               <td className="tnum px-3 py-1.5 text-right">{won.format(Math.round(mismatch.sheet))}</td>
               <td className="tnum px-3 py-1.5 text-right">{won.format(Math.round(mismatch.diff))}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function ImpliedRateTable({ rates }: { rates: ImpliedRate[] }) {
+  const digits = new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 4 })
+  return (
+    <div className="mt-2 overflow-x-auto rounded-lg border" style={{ borderColor: 'var(--line)' }}>
+      <table className="w-full min-w-[520px] text-sm">
+        <thead>
+          <tr className="border-b" style={{ borderColor: 'var(--line)' }}>
+            {['종목', '통화', '수량 × 단가', '시트 매입원가', '환율'].map((label, index) => (
+              <th
+                key={label}
+                scope="col"
+                className={`px-3 py-2 font-medium ${index >= 2 ? 'text-right' : 'text-left'}`}
+              >
+                {label}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rates.map((rate) => (
+            <tr key={rate.name} className="border-b" style={{ borderColor: 'var(--line)' }}>
+              <td className="px-3 py-1.5">{rate.name}</td>
+              <td className="px-3 py-1.5">{rate.currency}</td>
+              <td className="tnum px-3 py-1.5 text-right">{won.format(Math.round(rate.cost))}</td>
+              <td className="tnum px-3 py-1.5 text-right">{won.format(Math.round(rate.sheet))}</td>
+              <td className="tnum px-3 py-1.5 text-right">{digits.format(rate.rate)}</td>
             </tr>
           ))}
         </tbody>
