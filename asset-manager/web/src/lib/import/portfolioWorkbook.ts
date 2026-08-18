@@ -135,6 +135,14 @@ export interface NavMismatch {
 export interface ParsedNavs {
   navs: PortfolioNav[]
   /**
+   * Months absent from the middle of the range.
+   *
+   * Without this, "184 months arrived" leaves the reader guessing whether one
+   * was dropped. An empty list plus the range settles it: the count is whatever
+   * that span contains.
+   */
+  gaps: YearMonth[]
+  /**
    * Months where our arithmetic disagrees with the sheet's own derived columns.
    * Pure arithmetic, so any mismatch means a column or a month was misread.
    */
@@ -226,6 +234,7 @@ export function parseNavSheet(sheet: Sheet, sheetName = '기준가(월)'): Parse
 
   return {
     navs,
+    gaps: missingMonths(navs.map((month) => month.ym)),
     mismatches,
     skippedRows,
     firstYm: navs[0]?.ym ?? null,
@@ -240,10 +249,34 @@ export interface HoldingMismatch {
   diff: number
 }
 
+/**
+ * The rate the sheet used to convert a foreign holding's cost into won.
+ *
+ * For a foreign position the 매입원가 column is not 수량 × 단가 — it is that
+ * converted, so the ratio between them is the rate. A yen rate can be written
+ * either as 원/엔 or 원/100엔, and the two differ by exactly 100×, which is what
+ * made this look like an error at first.
+ */
+export interface ImpliedRate {
+  name: string
+  currency: CurrencyCode
+  /** 수량 × 단가, in the holding's own currency. */
+  cost: number
+  /** The sheet's 매입원가 column. */
+  sheet: number
+  /** sheet ÷ cost. Near 1 means the column was already in that currency. */
+  rate: number
+}
+
 export interface ParsedHoldings2 {
   holdings: Holding[]
-  /** Rows where 수량 × 단가 disagrees with the sheet's own 매입원가 column. */
+  /**
+   * Won holdings where 수량 × 단가 disagrees with the sheet's 매입원가.
+   * Arithmetic, so a disagreement means a column was misread.
+   */
   mismatches: HoldingMismatch[]
+  /** Conversion rates read back out of the foreign holdings' 매입원가. */
+  impliedRates: ImpliedRate[]
   /** Rows that had no 종목 name and so could not be a position. */
   skippedRows: number
 }
@@ -270,6 +303,7 @@ export function parseHoldingsInput(sheet: Sheet, sheetName = '입력정보'): Pa
 
   const holdings: Holding[] = []
   const mismatches: HoldingMismatch[] = []
+  const impliedRates: ImpliedRate[] = []
   let skippedRows = 0
 
   for (let r = headerRow + 1; r < rows.length; r++) {
@@ -302,11 +336,47 @@ export function parseHoldingsInput(sheet: Sheet, sheetName = '입력정보'): Pa
     if (columns.cost !== undefined) {
       const sheetValue = numberAt(rows, r, columns.cost)
       const ours = quantity * avgPrice
-      if (sheetValue !== null && Math.abs(ours - sheetValue) > 1) {
-        mismatches.push({ name, ours, sheet: sheetValue, diff: ours - sheetValue })
+      const currency = currencyOfExchange(exchange)
+
+      if (sheetValue !== null && ours !== 0) {
+        if (currency === 'KRW') {
+          // Pure arithmetic for a won holding, so a disagreement is a misread
+          // column. A relative allowance covers rounding on decimal prices.
+          const tolerance = Math.max(1, Math.abs(sheetValue) * 1e-6)
+          if (Math.abs(ours - sheetValue) > tolerance) {
+            mismatches.push({ name, ours, sheet: sheetValue, diff: ours - sheetValue })
+          }
+        } else {
+          // For a foreign holding the column is converted to won, so the ratio
+          // is the rate the sheet used — information, not an error.
+          impliedRates.push({ name, currency, cost: ours, sheet: sheetValue, rate: sheetValue / ours })
+        }
       }
     }
   }
 
-  return { holdings, mismatches, skippedRows }
+  return { holdings, mismatches, impliedRates, skippedRows }
+}
+
+function monthIndex(ym: YearMonth): number {
+  return Number(ym.slice(0, 4)) * 12 + Number(ym.slice(5, 7)) - 1
+}
+
+function ymOfIndex(index: number): YearMonth {
+  return `${Math.floor(index / 12)}-${String((index % 12) + 1).padStart(2, '0')}`
+}
+
+/** Months missing between the first and the last, in order. */
+export function missingMonths(yms: readonly YearMonth[]): YearMonth[] {
+  if (yms.length < 2) return []
+
+  const present = new Set(yms)
+  const indices = yms.map(monthIndex)
+  const gaps: YearMonth[] = []
+
+  for (let index = Math.min(...indices); index <= Math.max(...indices); index++) {
+    const ym = ymOfIndex(index)
+    if (!present.has(ym)) gaps.push(ym)
+  }
+  return gaps
 }
