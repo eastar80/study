@@ -247,6 +247,23 @@ describe('costOf', () => {
 })
 
 describe('costKrwOf', () => {
+  it('does not double the rate on a dollar cash row whose 단가 holds the rate', () => {
+    // 수량 1,200 (달러), 단가 1,350 (환율), 매입원가 1,620,000 (이미 원화). Reading
+    // 매입원가 here and converting it again gave 1,385× the truth.
+    const cash = holding({
+      name: '현금($)',
+      ticker: 'USD',
+      style: '현금',
+      quantity: 1_200,
+      avgPrice: 1_350,
+      costNative: 1_620_000,
+      currency: 'USD',
+      exchange: 'USD',
+    })
+    expect(costOf(cash)).toBe(1_200)
+    expect(costKrwOf(cash, RATES)).toBe(1_200 * 1400)
+  })
+
   it('applies the rate, which is what foreign costs were missing', () => {
     expect(costKrwOf(holding({ currency: 'USD', costNative: 1_000 }), RATES)).toBe(1_400_000)
     expect(costKrwOf(holding({ currency: 'JPY', costNative: 1_000_000 }), RATES)).toBe(9_000_000)

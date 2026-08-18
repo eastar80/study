@@ -50,19 +50,27 @@ export interface Valued {
 }
 
 /**
- * A position with no quotable ticker — cash, in any currency.
+ * Cash, in any currency.
  *
  * Its price is **one unit of its own currency**: 1원, 1달러, 1엔. So it goes
  * through the same `수량 × 현재가 × 환율` as everything else, and its 수량 is the
  * amount held. The 단가 cell on a cash row holds an exchange rate rather than a
  * price, so it is never read.
  *
- * A foreign cash line therefore re-values as the rate moves, which is what cash
- * actually does.
+ * **A blank ticker does not make a row cash.** It used to, and that was wrong:
+ * 한국증권금융 is unlisted, so its ticker cell is empty, and treating it as cash
+ * priced it at 1원 a share *and* kept it out of the hand-entered-price list — the
+ * one control that would have fixed it. "No ticker" means "no quote source",
+ * which is a different fact from "this is cash".
+ *
+ * So cash is recognised only by positive evidence: the sheet's own `cash` marker,
+ * the 구분 the user files it under, or a name that says so. Anything else with no
+ * ticker is an unquotable holding, and the screen offers a price box for it.
  */
 export function isCashLike(holding: Holding): boolean {
-  const ticker = holding.ticker.trim()
-  return ticker === '' || /^cash$/i.test(ticker)
+  if (/^cash$/i.test(holding.ticker.trim())) return true
+  if (holding.style.trim() === '현금') return true
+  return holding.name.trim().startsWith('현금')
 }
 
 /**

@@ -662,7 +662,9 @@ function HoldingTable({
                     ? '직접 입력'
                     : isCashLike(holding)
                       ? '현금 · 1단위'
-                      : (symbolOf.get(holding.id)?.symbol ?? '—')}
+                      : // An unlisted holding has no ticker, so there is no symbol
+                        // to show — a dash, never a blank that reads as missing UI.
+                        (symbolOf.get(holding.id)?.symbol || '조회 불가')}
                 </span>
               </th>
               <td className="px-2 py-1.5" style={{ color: 'var(--ink-muted)' }}>

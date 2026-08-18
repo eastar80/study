@@ -125,8 +125,44 @@ describe('valueHolding', () => {
     expect(valueHolding(cash, 9, 9, 780_003).marketValueKrw).toBe(780_003)
   })
 
-  it('treats an empty ticker as cash too', () => {
-    const cash = holding({ ticker: '   ', quantity: 1000 })
+  it('does not treat a blank ticker as cash — it is an unquotable holding', () => {
+    // 한국증권금융 is unlisted, so its ticker cell is empty. Reading that as cash
+    // priced it at 1원 a share and hid it from the hand-entered-price list.
+    const unlisted = holding({ name: '한국증권금융', ticker: '   ', style: '가치', quantity: 120 })
+    const valued = valueHolding(unlisted, null, 1, 5_040_000)
+    expect(valued.marketValueKrw).toBeNull()
+    expect(valued.problem).toContain('시세')
+  })
+
+  it('never doubles the rate on a dollar cash row whose 단가 holds the rate', () => {
+    /*
+     * The observed row: 수량 1,200 (달러), 단가 1,350 (환율), 매입원가 1,620,000
+     * (이미 원화). Its ticker was neither blank nor `cash`, so it missed the cash
+     * path, was read as an ordinary holding, and the rate got applied a second
+     * time — 1,385× too large in both 매입원가(원) and 평가금액(원).
+     *
+     * On the cash path neither 단가 nor 매입원가 is read at all, so the doubling
+     * cannot happen: 1,200 × 1달러 × 1,385 = 1,662,000원.
+     */
+    const cash = holding({
+      name: '현금($)',
+      ticker: 'USD',
+      style: '현금',
+      quantity: 1_200,
+      avgPrice: 1_350,
+      costNative: 1_620_000,
+      currency: 'USD',
+      exchange: 'USD',
+      priceScale: 1,
+    })
+    expect(isCashLike(cash)).toBe(true)
+    const valued = valueHolding(cash, 1_350, 1385, 1_200 * 1385)
+    expect(valued.price).toBe(1)
+    expect(valued.marketValueKrw).toBe(1_662_000)
+  })
+
+  it('recognises cash by 구분, so a blank ticker is not needed', () => {
+    const cash = holding({ name: 'MMF 예수금', ticker: '', style: '현금', quantity: 1000 })
     expect(valueHolding(cash, null, 9, 9000).marketValueKrw).toBe(9000)
   })
 
@@ -218,10 +254,19 @@ describe('valueHolding', () => {
 })
 
 describe('isCashLike', () => {
-  it('recognises the sheet\'s cash marker and a blank ticker', () => {
+  it('recognises the sheet\'s cash marker', () => {
     expect(isCashLike(holding({ ticker: 'cash' }))).toBe(true)
     expect(isCashLike(holding({ ticker: 'CASH' }))).toBe(true)
-    expect(isCashLike(holding({ ticker: '  ' }))).toBe(true)
+  })
+
+  it('recognises the 구분 the user files cash under, and a name that says so', () => {
+    expect(isCashLike(holding({ ticker: '', style: '현금' }))).toBe(true)
+    expect(isCashLike(holding({ ticker: '', style: '가치', name: '현금($)' }))).toBe(true)
+  })
+
+  it('needs positive evidence — a blank ticker alone is not cash', () => {
+    // Only "no quote source", which is what the price box is for.
+    expect(isCashLike(holding({ name: '한국증권금융', ticker: '  ', style: '가치' }))).toBe(false)
   })
 
   it('does not mistake a listed holding for cash', () => {
