@@ -2,9 +2,12 @@ import { useState } from 'react'
 import {
   clearCredentials,
   describeCredentialProblem,
+  describeProxyProblem,
   getApiKey,
   getClientId,
+  getQuoteProxyUrl,
   setCredentials,
+  setQuoteProxyUrl,
 } from '../config'
 import type { Vault } from '../state/useVault'
 import { Alert, Button, Card, Field, Muted, TextInput } from '../ui/primitives'
@@ -39,6 +42,10 @@ export function Settings({
   const [saved, setSaved] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
 
+  const [proxyUrl, setProxyUrl] = useState(getQuoteProxyUrl)
+  const [proxySaved, setProxySaved] = useState(false)
+  const [proxyProblem, setProxyProblem] = useState<string | null>(null)
+
   function save() {
     const issue = describeCredentialProblem(clientId.trim(), apiKey.trim())
     setProblem(issue)
@@ -46,6 +53,15 @@ export function Settings({
     setCredentials(clientId, apiKey)
     setSaved(true)
     setTimeout(() => setSaved(false), 3000)
+  }
+
+  function saveProxy() {
+    const issue = describeProxyProblem(proxyUrl)
+    setProxyProblem(issue)
+    if (issue) return
+    setQuoteProxyUrl(proxyUrl)
+    setProxySaved(true)
+    setTimeout(() => setProxySaved(false), 3000)
   }
 
   function reset() {
@@ -87,6 +103,45 @@ export function Settings({
           <div className="flex flex-wrap gap-2">
             <Button onClick={save}>저장</Button>
             <Button variant="ghost" onClick={reset}>
+              지우기
+            </Button>
+          </div>
+        </div>
+      </Card>
+
+      <Card title="시세·환율 프록시">
+        <div className="space-y-4">
+          <Muted>
+            브라우저는 CORS 때문에 시세 사이트를 직접 부를 수 없어 중계가 하나 필요합니다. 배포 절차는{' '}
+            <code>docs/07-시세-프록시.md</code> 에 있습니다. 이 주소로는 <strong>종목 심볼만</strong>{' '}
+            오갑니다 — 보유 수량이나 금액은 가지 않습니다.
+          </Muted>
+
+          <Field
+            label="Apps Script 웹 앱 주소"
+            hint='"/exec" 로 끝나는 주소입니다. "/dev" 는 편집자만 열 수 있어 앱에서는 동작하지 않습니다.'
+          >
+            <TextInput
+              value={proxyUrl}
+              onChange={setProxyUrl}
+              placeholder="https://script.google.com/macros/s/…/exec"
+              mono
+            />
+          </Field>
+
+          {proxyProblem && <Alert tone="error">{proxyProblem}</Alert>}
+          {proxySaved && <Alert tone="info">저장했습니다. 포트폴리오에서 시세를 불러올 수 있습니다.</Alert>}
+
+          <div className="flex gap-2">
+            <Button onClick={saveProxy}>저장</Button>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setQuoteProxyUrl('')
+                setProxyUrl('')
+                setProxyProblem(null)
+              }}
+            >
               지우기
             </Button>
           </div>
