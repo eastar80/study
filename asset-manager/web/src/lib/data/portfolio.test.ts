@@ -12,6 +12,7 @@ import {
   summariseNavs,
 } from './portfolio'
 import type { CurrencyCode, Holding, PortfolioNav } from './model'
+import type { Valued } from '../quotes/valuation'
 
 function navs(): PortfolioNav[] {
   return [
@@ -164,62 +165,75 @@ const RATES: ReadonlyMap<CurrencyCode, number> = new Map<CurrencyCode, number>([
 ])
 
 describe('compositionAt', () => {
+  /** Market value is what the bars draw; cost is the fallback before any quote. */
+  const marketValue = (row: Valued) => row.marketValueKrw
+  const cost = (row: Valued) => row.costKrw
+
+  /** A row valued at `marketValueKrw`, the shape `Portfolio` hands in. */
+  function row(partial: Partial<Holding>, marketValueKrw: number | null, costKrw = 0): Valued {
+    const one = holding(partial)
+    return {
+      holding: one,
+      price: marketValueKrw === null ? null : 1,
+      rate: marketValueKrw === null ? null : 1,
+      marketValueKrw,
+      costKrw,
+      gainKrw: null,
+      returnPct: null,
+    }
+  }
+
   const mixed = [
-    holding({ id: 'h1', style: '성장', currency: 'KRW', quantity: 10, avgPrice: 30000, costNative: 300_000 }),
-    holding({ id: 'h2', style: '배당', currency: 'KRW', quantity: 10, avgPrice: 10000, costNative: 100_000 }),
-    // 1,000달러 → 1,400,000원.
-    holding({ id: 'h3', style: '성장', currency: 'USD', quantity: 5, avgPrice: 200, costNative: 1_000 }),
-    // 100만엔 → 900만원. 단가 carries 100×, so only 매입원가 is right.
-    holding({
-      id: 'h4',
-      style: '배당',
-      currency: 'JPY',
-      quantity: 400,
-      avgPrice: 250_000,
-      costNative: 1_000_000,
-      priceScale: 0.01,
-    }),
+    row({ id: 'h1', style: '성장', currency: 'KRW' }, 400_000, 300_000),
+    row({ id: 'h2', style: '배당', currency: 'KRW' }, 150_000, 100_000),
+    row({ id: 'h3', style: '성장', currency: 'USD' }, 1_400_000, 1_200_000),
+    row({ id: 'h4', style: '배당', currency: 'JPY' }, 9_000_000, 8_000_000),
   ]
 
-  it('converts every currency to won before adding them up', () => {
-    // The costs come out of the sheet in each holding's own currency, so they
-    // cannot share one bar until a rate has been applied.
-    const { total, slices, unconverted } = compositionAt(mixed, 'style', RATES)
-    expect(total).toBe(400_000 + 1_400_000 + 9_000_000)
-    expect(unconverted).toEqual([])
+  it('adds market values up on one won scale', () => {
+    const { total, slices, excluded } = compositionAt(mixed, 'style', marketValue)
+    expect(total).toBe(400_000 + 150_000 + 1_400_000 + 9_000_000)
+    expect(excluded).toEqual([])
     expect(slices.map((slice) => slice.key)).toEqual(['배당', '성장'])
-    expect(slices[0]!.cost).toBe(100_000 + 9_000_000)
+    expect(slices[0]!.amount).toBe(150_000 + 9_000_000)
     expect(slices.reduce((sum, slice) => sum + slice.share, 0)).toBeCloseTo(1)
   })
 
   it('groups by currency with the same function', () => {
-    const { slices } = compositionAt(mixed, 'currency', RATES)
+    const { slices } = compositionAt(mixed, 'currency', marketValue)
     expect(slices.map((slice) => slice.key)).toEqual(['JPY', 'USD', 'KRW'])
-    expect(slices.find((slice) => slice.key === 'JPY')!.cost).toBe(9_000_000)
+    expect(slices.find((slice) => slice.key === 'JPY')!.amount).toBe(9_000_000)
   })
 
-  it('leaves out a holding with no rate and names it, rather than adding zero', () => {
+  it('draws cost when asked, which is the fallback before a quote arrives', () => {
+    const { total, slices } = compositionAt(mixed, 'style', cost)
+    expect(total).toBe(300_000 + 100_000 + 1_200_000 + 8_000_000)
+    expect(slices[0]!.amount).toBe(100_000 + 8_000_000)
+  })
+
+  it('leaves out a row with no figure and names it, rather than adding zero', () => {
     // Silently adding 0 shrinks the total and redraws every other share, with
     // nothing on screen to say why.
-    const { total, unconverted } = compositionAt(mixed, 'style', new Map([['USD', 1400]]))
-    expect(total).toBe(400_000 + 1_400_000)
-    expect(unconverted).toEqual(['kodex 200'])
+    const withGap = [...mixed, row({ id: 'h5', name: '한국증권금융', style: '가치' }, null)]
+    const { total, excluded } = compositionAt(withGap, 'style', marketValue)
+    expect(total).toBe(400_000 + 150_000 + 1_400_000 + 9_000_000)
+    expect(excluded).toEqual(['한국증권금융'])
   })
 
   it('groups by region, account and owner too', () => {
-    expect(compositionAt(mixed, 'region', RATES).slices[0]!.key).toBe('국내')
-    expect(compositionAt(mixed, 'account', RATES).slices[0]!.key).toBe('유안타주식')
-    expect(compositionAt(mixed, 'owner', RATES).slices[0]!.key).toBe('호빵')
+    expect(compositionAt(mixed, 'region', marketValue).slices[0]!.key).toBe('국내')
+    expect(compositionAt(mixed, 'account', marketValue).slices[0]!.key).toBe('유안타주식')
+    expect(compositionAt(mixed, 'owner', marketValue).slices[0]!.key).toBe('호빵')
   })
 
   it('labels a blank classification rather than dropping the holding', () => {
-    expect(
-      compositionAt([holding({ style: '', costNative: 1000 })], 'style', RATES).slices[0]!.key,
-    ).toBe('미분류')
+    expect(compositionAt([row({ style: '' }, 1000)], 'style', marketValue).slices[0]!.key).toBe(
+      '미분류',
+    )
   })
 
-  it('leaves out a position with no cost, which would be a zero-width segment', () => {
-    expect(compositionAt([holding({ quantity: 0, avgPrice: 0 })], 'style', RATES).slices).toEqual([])
+  it('leaves out a zero position, which would be a zero-width segment', () => {
+    expect(compositionAt([row({}, 0)], 'style', marketValue).slices).toEqual([])
   })
 })
 

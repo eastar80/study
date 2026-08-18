@@ -128,11 +128,6 @@ export function Portfolio({ vault, onGoToImport }: { vault: Vault; onGoToImport:
   const window = useMemo(() => recentNavs(data.portfolioNavs, TREND_MONTHS), [data.portfolioNavs])
   const ownerList = useMemo(() => owners(data.holdings), [data.holdings])
   const visible = useMemo(() => byOwner(data.holdings, owner), [data.holdings, owner])
-  const composition = useMemo(
-    () => compositionAt(visible, dimension, rates),
-    [visible, dimension, rates],
-  )
-  const byCurrency = useMemo(() => compositionAt(visible, 'currency', rates), [visible, rates])
 
   /**
    * Valuation is derived, never stored — a saved market value would be stale the
@@ -156,6 +151,36 @@ export function Portfolio({ vault, onGoToImport }: { vault: Vault; onGoToImport:
   }, [visible, prices, rates, symbolOf, overrideOf])
 
   const totals = useMemo(() => summariseValues(valued), [valued])
+
+  /**
+   * The composition bars go by **market value**, so they answer "what is my money
+   * in now" rather than "what did I pay". Both bar totals then equal the 평가금액
+   * KPI, which is a cross-check the reader can do by eye.
+   *
+   * Before any quote arrives there is no market value, and an empty bar on the one
+   * screen about composition is a bad trade. So it falls back to cost — and the
+   * card says which basis it is drawing, because an unlabelled switch between the
+   * two is how a chart starts lying.
+   *
+   * The switch is on **whether a quote was ever requested**, not on how many rows
+   * came back with a value. "Is anything valued" looked equivalent and is not: won
+   * cash is priced at 1원 with a rate of 1, so it values with no quotes at all, and
+   * the bar flipped to market value showing one holding out of seventeen. Asked
+   * versus not-asked is a categorical difference; "enough rows" would be a
+   * threshold, and a threshold here is a guess. Once the answer is in, partial
+   * results are drawn as market value with the missing rows named — which is what
+   * every other total on this screen already does.
+   */
+  const basis: 'MARKET' | 'COST' = prices === null ? 'COST' : 'MARKET'
+  const amountOf = useMemo(
+    () => (row: Valued) => (basis === 'MARKET' ? row.marketValueKrw : row.costKrw),
+    [basis],
+  )
+  const composition = useMemo(
+    () => compositionAt(valued, dimension, amountOf),
+    [valued, dimension, amountOf],
+  )
+  const byCurrency = useMemo(() => compositionAt(valued, 'currency', amountOf), [valued, amountOf])
 
   /** Rows a hand-entered price would fix, plus the ones already carrying one. */
   const needsPrice = useMemo(
@@ -431,15 +456,12 @@ export function Portfolio({ vault, onGoToImport }: { vault: Vault; onGoToImport:
             }
           >
             <div className="space-y-5">
-              <Muted>
-                <strong>매입원가 기준</strong>이고, 시트의 통화별 금액을 오늘 환율로{' '}
-                <strong>원화 환산</strong>한 값입니다. 한 축에서 비교하려면 단위가 같아야 합니다.
-              </Muted>
+              <BasisNote basis={basis} />
 
-              {composition.unconverted.length > 0 && (
+              {composition.excluded.length > 0 && (
                 <Alert tone="warn">
-                  환율이 없어 <strong>구성에서 빠진 종목</strong>이 있습니다:{' '}
-                  {composition.unconverted.join(', ')}
+                  값을 구하지 못해 <strong>구성에서 빠진 종목</strong>이 있습니다:{' '}
+                  {composition.excluded.join(', ')}
                 </Alert>
               )}
 
@@ -450,24 +472,21 @@ export function Portfolio({ vault, onGoToImport }: { vault: Vault; onGoToImport:
                     key: slice.key,
                     name: slice.key,
                     share: slice.share,
-                    amount: slice.cost,
+                    amount: slice.amount,
                     slot,
                     color: seriesColor(slot),
                   }
                 })}
                 total={composition.total}
                 mask={mask}
-                emptyMessage="환율이 없어 원화로 환산할 수 있는 종목이 없습니다."
+                emptyMessage="원화로 환산할 수 있는 종목이 없습니다."
               />
             </div>
           </Card>
 
           <Card title="통화별">
             <div className="space-y-3">
-              <Muted>
-                거래소가 정하는 통화별 매입원가입니다. 금액은 오늘 환율로 원화 환산한 값이라 그대로 더할
-                수 있습니다.
-              </Muted>
+              <BasisNote basis={basis} prefix="거래소가 정하는 통화별 비중입니다." />
               <StackedBar
                 segments={byCurrency.slices.map((slice): Segment => {
                   const slot = currencySlotOf.get(slice.key) ?? SLOT_COUNT
@@ -475,14 +494,14 @@ export function Portfolio({ vault, onGoToImport }: { vault: Vault; onGoToImport:
                     key: slice.key,
                     name: slice.key,
                     share: slice.share,
-                    amount: slice.cost,
+                    amount: slice.amount,
                     slot,
                     color: seriesColor(slot),
                   }
                 })}
                 total={byCurrency.total}
                 mask={mask}
-                emptyMessage="환율이 없어 원화로 환산할 수 있는 종목이 없습니다."
+                emptyMessage="원화로 환산할 수 있는 종목이 없습니다."
               />
             </div>
           </Card>
@@ -493,6 +512,33 @@ export function Portfolio({ vault, onGoToImport }: { vault: Vault; onGoToImport:
         </>
       )}
     </div>
+  )
+}
+
+/**
+ * Says which figure the bar beside it is drawing.
+ *
+ * The basis switches on its own when no quote has arrived, and a chart that
+ * changes what it measures without saying so is worse than one that is sometimes
+ * empty. So the label is not decoration — it is the thing that keeps the switch
+ * honest.
+ */
+function BasisNote({ basis, prefix }: { basis: 'MARKET' | 'COST'; prefix?: string }) {
+  return (
+    <Muted>
+      {prefix ? `${prefix} ` : ''}
+      {basis === 'MARKET' ? (
+        <>
+          <strong>평가금액 기준</strong>입니다 — 현재 시세로 환산한 원화 금액이라, 합계가 위 평가금액과
+          같습니다.
+        </>
+      ) : (
+        <>
+          아직 시세가 없어 <strong>매입원가 기준</strong>으로 그렸습니다. 시세를 불러오면 평가금액
+          기준으로 바뀝니다.
+        </>
+      )}
+    </Muted>
   )
 }
 

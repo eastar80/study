@@ -11,7 +11,7 @@
  */
 
 import type { CurrencyCode, Holding, PortfolioNav } from './model'
-import { isCashLike, krwPerUnit } from '../quotes/valuation'
+import { isCashLike, krwPerUnit, type Valued } from '../quotes/valuation'
 
 export interface NavSummary {
   ym: string
@@ -142,59 +142,64 @@ export function byOwner(holdings: readonly Holding[], owner: string | null): Hol
   return owner === null ? [...holdings] : holdings.filter((holding) => holding.owner === owner)
 }
 
-export interface CostSlice {
+export interface CompositionSlice {
   key: string
   /** Won. */
-  cost: number
+  amount: number
   /** Fraction of the total, 0–1. */
   share: number
 }
 
 export interface Composition {
-  /** Won, over the holdings that could be converted. */
+  /** Won, over the rows that had a figure. */
   total: number
-  slices: CostSlice[]
+  slices: CompositionSlice[]
   /**
-   * Holdings left out because their currency had no rate, by name. A composition
-   * that quietly drops a position redraws every share without saying why.
+   * Rows left out because the figure was missing — no quote, or no exchange rate.
+   * A composition that quietly drops a position redraws every share without
+   * saying why, so the names come out with the total.
    */
-  unconverted: string[]
+  excluded: string[]
 }
 
 /**
- * Composition at cost in won, by any of the holding's dimensions.
+ * Composition in won, by any of the holding's dimensions.
  *
- * One bar on one scale, so the shares mean something — which needs every cost in
- * the same unit, and the costs come out of the sheet in each holding's own
- * currency. Converting needs today's rate; a holding whose rate is missing is
- * reported rather than added as 0.
+ * One bar on one scale, so the shares mean something — which needs every figure in
+ * the same unit. `valueOf` supplies it already converted, and returns null when it
+ * could not be worked out; those rows are reported rather than added as 0.
+ *
+ * The figure is a parameter rather than baked in because the screen shows
+ * composition **by market value**, and falls back to cost only when no quote has
+ * arrived yet — and it says which of the two it is drawing.
  */
 export function compositionAt(
-  holdings: readonly Holding[],
+  rows: readonly Valued[],
   dimension: 'style' | 'region' | 'currency' | 'account' | 'owner',
-  rates: ReadonlyMap<CurrencyCode, number>,
+  valueOf: (row: Valued) => number | null,
 ): Composition {
   const byKey = new Map<string, number>()
-  const unconverted: string[] = []
+  const excluded: string[] = []
 
-  for (const holding of holdings) {
-    const cost = costKrwOf(holding, rates)
-    if (cost === null) {
-      if (costOf(holding) !== 0) unconverted.push(holding.name)
+  for (const row of rows) {
+    const amount = valueOf(row)
+    if (amount === null) {
+      excluded.push(row.holding.name)
       continue
     }
-    if (cost === 0) continue
-    const key = holding[dimension] === '' ? '미분류' : String(holding[dimension])
-    byKey.set(key, (byKey.get(key) ?? 0) + cost)
+    if (amount === 0) continue
+    const value = row.holding[dimension]
+    const key = value === '' ? '미분류' : String(value)
+    byKey.set(key, (byKey.get(key) ?? 0) + amount)
   }
 
-  const total = [...byKey.values()].reduce((sum, cost) => sum + cost, 0)
+  const total = [...byKey.values()].reduce((sum, amount) => sum + amount, 0)
   return {
     total,
     slices: [...byKey.entries()]
-      .map(([key, cost]) => ({ key, cost, share: total === 0 ? 0 : cost / total }))
-      .sort((a, b) => b.cost - a.cost),
-    unconverted,
+      .map(([key, amount]) => ({ key, amount, share: total === 0 ? 0 : amount / total }))
+      .sort((a, b) => b.amount - a.amount),
+    excluded,
   }
 }
 
