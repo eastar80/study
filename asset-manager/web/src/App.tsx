@@ -4,6 +4,7 @@ import { useRoute, type Route } from './ui/hashRoute'
 import { Card, Muted } from './ui/primitives'
 import { Dashboard } from './routes/Dashboard'
 import { Import } from './routes/Import'
+import { Portfolio } from './routes/Portfolio'
 import { Ledger } from './routes/Ledger'
 import { Inspect } from './routes/Inspect'
 import { Settings } from './routes/Settings'
@@ -21,7 +22,6 @@ const TITLES: Record<Route, string> = {
 }
 
 const PENDING: Partial<Record<Route, string>> = {
-  portfolio: '자산 대장과 대시보드를 실제로 써 본 뒤에 만듭니다. 시세·환율 중계용 프록시가 함께 필요합니다.',
   timeline: '마지막 단계에서 만듭니다.',
 }
 
@@ -60,6 +60,10 @@ export default function App() {
 
         <div className="mx-auto w-full max-w-[1200px] p-5 md:p-6">
           {route === 'dashboard' && <Dashboard vault={vault} onGoToImport={() => navigate('import')} />}
+
+          {route === 'portfolio' && (
+            <Portfolio vault={vault} onGoToImport={() => navigate('import')} />
+          )}
 
           {route === 'ledger' && <Ledger vault={vault} />}
 
