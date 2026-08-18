@@ -99,6 +99,11 @@ export function formatRate(rate: number | null): string {
   return `${new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 2 }).format(rate)}%`
 }
 
+/** '2026-01' → '26.1', for an axis spanning years where '1월' is ambiguous. */
+export function shortYearMonth(ym: string): string {
+  return `${ym.slice(2, 4)}.${Number(ym.slice(5, 7))}`
+}
+
 /** '2026-01' → '1월' for a compact column header. */
 export function monthLabel(ym: string): string {
   return `${Number(ym.slice(5, 7))}월`

@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { formatAmount, formatCompactWon, monthLabel } from '../../lib/data/format'
+import { formatAmount, formatCompactWon, monthLabel, shortYearMonth } from '../../lib/data/format'
 import { linearScale, niceTicks } from '../../lib/chart/scale'
 import { useElementWidth } from '../useElementWidth'
 
@@ -29,12 +29,25 @@ export function TrendChart({
   series,
   notes = {},
   mask = false,
+  formatValue = (value) => formatCompactWon(value),
+  formatExact,
+  includeZero = true,
 }: {
   months: string[]
   series: Series[]
   /** ym → event note, drawn as a tick under the axis and shown on hover. */
   notes?: Record<string, string>
   mask?: boolean
+  /** Axis and label formatting, for a chart whose values are not won. */
+  formatValue?: (value: number | null) => string
+  /** Tooltip formatting, when the exact figure reads differently to the axis. */
+  formatExact?: (value: number) => string
+  /**
+   * Stretch the axis to zero. Right for money, wrong for an indexed series —
+   * those are anchored at 100, and a zero baseline squashes the whole story into
+   * the top third of the plot.
+   */
+  includeZero?: boolean
 }) {
   const [wrapRef, width] = useElementWidth<HTMLDivElement>()
   const [active, setActive] = useState<number | null>(null)
@@ -43,13 +56,26 @@ export function TrendChart({
   const ticks = useMemo(() => {
     const values = series.flatMap((one) => one.values.filter((value): value is number => value !== null))
     if (values.length === 0) return [0, 1]
-    return niceTicks(Math.min(...values), Math.max(...values))
-  }, [series])
+    return niceTicks(Math.min(...values), Math.max(...values), { includeZero })
+  }, [series, includeZero])
 
   const scale = useMemo(() => linearScale(ticks), [ticks])
 
+  const exact = (value: number, masked: boolean) =>
+    masked ? '****' : formatExact ? formatExact(value) : `${formatAmount(value)}원`
+
   const height = PAD.top + PLOT_HEIGHT + PAD.bottom
   const plotWidth = Math.max(0, width - PAD.left - PAD.right)
+
+  // Labels need roughly this much room each; drawing more than fit smears them
+  // into an unreadable band, which is what sixty months did.
+  const LABEL_WIDTH = 34
+  const longSpan = months.length > 12
+  const stride = Math.max(
+    1,
+    Math.ceil(months.length / Math.max(1, Math.floor(plotWidth / LABEL_WIDTH))),
+  )
+
 
   // A single month has no width to spread over, so it sits in the middle.
   const xOf = (index: number) =>
@@ -131,15 +157,13 @@ export function TrendChart({
                     fontSize={10}
                     fill="var(--ink-muted)"
                   >
-                    {mask ? '****' : formatCompactWon(tick)}
+                    {mask ? '****' : formatValue(tick)}
                   </text>
                 </g>
               )
             })}
 
             {months.map((ym, index) => {
-              // Twelve labels crowd a narrow card, so drop every other one there.
-              const stride = plotWidth < 420 ? 3 : plotWidth < 640 ? 2 : 1
               if (index % stride !== 0 && index !== months.length - 1) return null
               return (
                 <text
@@ -150,7 +174,7 @@ export function TrendChart({
                   fontSize={10}
                   fill="var(--ink-muted)"
                 >
-                  {monthLabel(ym)}
+                  {longSpan ? shortYearMonth(ym) : monthLabel(ym)}
                 </text>
               )
             })}
@@ -216,7 +240,7 @@ export function TrendChart({
                     fontSize={11}
                     fill="var(--ink)"
                   >
-                    {mask ? '****' : formatCompactWon(one.values.at(-1) ?? null)}
+                    {mask ? '****' : formatValue(one.values.at(-1) ?? null)}
                   </text>
                 </g>
               )
@@ -255,7 +279,7 @@ export function TrendChart({
                   <span className="tnum">
                     {one.values[active!] === null || one.values[active!] === undefined
                       ? '기록 없음'
-                      : `${formatAmount(one.values[active!]!, { mask })}원`}
+                      : exact(one.values[active!]!, mask)}
                   </span>
                 </span>
               ))}
@@ -302,7 +326,7 @@ export function TrendChart({
                     <td key={one.key} className="tnum px-2 py-1.5 text-right">
                       {one.values[index] === null || one.values[index] === undefined
                         ? ''
-                        : formatAmount(one.values[index]!, { mask })}
+                        : exact(one.values[index]!, mask)}
                     </td>
                   ))}
                   <td className="px-2 py-1.5" style={{ color: 'var(--ink-muted)' }}>

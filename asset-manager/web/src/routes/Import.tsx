@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { hasCredentials } from '../config'
 import { describeUnsupportedFile, pickSpreadsheet, type PickedFile } from '../lib/google/picker'
-import { getSheetGrid, getSpreadsheetOutline, type Sheet } from '../lib/google/sheets'
+import { getSpreadsheetOutline, type Sheet } from '../lib/google/sheets'
 import {
   combine,
   crossCheck,
@@ -20,15 +20,11 @@ import {
 import type { ImportAdjustment, Item } from '../lib/data/model'
 import type { Vault } from '../state/useVault'
 import { Alert, Badge, Button, Card, Field, Muted, TextInput } from '../ui/primitives'
+import { ImportSecurities } from './ImportSecurities'
+import { SectionTitle, Stat, readSheet, won } from './importShared'
 
 const BALANCE_SHEET = '잔액입력'
 const HOLDINGS_SHEET = '자산보유현황'
-
-/** Wide enough for the observed sheets (59 and 26 columns) with room to grow. */
-const READ_ROWS = 1000
-const READ_COLS = 300
-
-const won = new Intl.NumberFormat('ko-KR')
 
 interface LoadedSheets {
   file: PickedFile
@@ -144,7 +140,8 @@ export function Import({ vault, signedIn, onConnect }: { vault: Vault; signedIn:
   const adjustedCells = preview ? preview.balances.adjustedCells + preview.holdings.adjustedCells : 0
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-8">
+      <div className="space-y-5">
       <Card title="자산현황 워크북 가져오기">
         <div className="space-y-4">
           <Muted>
@@ -456,15 +453,13 @@ export function Import({ vault, signedIn, onConnect }: { vault: Vault; signedIn:
           </Card>
         </>
       )}
+      </div>
+
+      {/* The two workbooks share only the picker, and either can be imported on
+          its own, so the securities flow keeps its own state. */}
+      <ImportSecurities vault={vault} signedIn={signedIn} ready={ready} />
     </div>
   )
-}
-
-async function readSheet(spreadsheetId: string, title: string): Promise<Sheet> {
-  const response = await getSheetGrid(spreadsheetId, title, READ_ROWS, READ_COLS)
-  const sheet = response.sheets?.[0]
-  if (!sheet) throw new Error(`"${title}" 시트를 읽지 못했습니다.`)
-  return sheet
 }
 
 /**
@@ -595,21 +590,4 @@ function MismatchTable({ mismatches }: { mismatches: Mismatch[] }) {
   )
 }
 
-function SectionTitle({ children }: { children: React.ReactNode }) {
-  return (
-    <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--ink-muted)' }}>
-      {children}
-    </h3>
-  )
-}
 
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <dt className="text-xs" style={{ color: 'var(--ink-muted)' }}>
-        {label}
-      </dt>
-      <dd className="tnum font-medium">{value}</dd>
-    </div>
-  )
-}

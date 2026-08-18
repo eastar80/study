@@ -1,4 +1,5 @@
 import { formatAmount, formatCompactWon, formatShare } from '../../lib/data/format'
+import type { CurrencyCode } from '../../lib/data/model'
 
 export interface Segment {
   key: string
@@ -27,11 +28,14 @@ export function StackedBar({
   total,
   mask = false,
   emptyMessage = '기록이 없습니다.',
+  currency = 'KRW',
 }: {
   segments: Segment[]
   total: number
   mask?: boolean
   emptyMessage?: string
+  /** 억/만 is a won reading, so a dollar or yen bar must not wear it. */
+  currency?: CurrencyCode
 }) {
   if (segments.length === 0) {
     return (
@@ -67,7 +71,7 @@ export function StackedBar({
               background: segment.color,
               borderRadius: index === drawn.length - 1 ? '0 4px 4px 0' : 0,
             }}
-            title={`${segment.name} ${formatAmount(segment.amount, { mask })}원`}
+            title={`${segment.name} ${money(segment.amount, currency, mask)}`}
           />
         ))}
       </div>
@@ -84,14 +88,26 @@ export function StackedBar({
             <span className="tnum shrink-0" style={{ color: 'var(--ink-muted)' }}>
               {formatShare(segment.share)}
             </span>
-            <span className="tnum shrink-0 tabular-nums">{formatCompactWon(segment.amount, { mask })}</span>
+            <span className="tnum shrink-0 tabular-nums">{money(segment.amount, currency, mask)}</span>
           </li>
         ))}
       </ul>
 
       <p className="mt-3 border-t pt-2 text-sm" style={{ borderColor: 'var(--line)' }}>
-        합계 <span className="tnum font-medium">{formatAmount(total, { mask })}원</span>
+        합계 <span className="tnum font-medium">{money(total, currency, mask, true)}</span>
       </p>
     </div>
   )
+}
+
+/**
+ * Won gets the 억/만 reading it would be spoken with; other currencies get their
+ * own symbol and plain digits, because "3,240만" of dollars is not a thing.
+ */
+function money(value: number, currency: CurrencyCode, mask: boolean, exact = false): string {
+  if (mask) return '****'
+  if (currency === 'KRW') {
+    return exact ? `${formatAmount(value)}원` : formatCompactWon(value)
+  }
+  return formatAmount(value, { currency, showSymbol: true })
 }

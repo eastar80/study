@@ -122,6 +122,59 @@ export interface ImportAdjustment {
   reason: string
 }
 
+/**
+ * One month of the portfolio treated as a single fund.
+ *
+ * From `기준가(월)`, which is a performance ledger for the whole portfolio rather
+ * than per holding. Only the three originals are stored — 수익률, 누적입금 and
+ * 누적수익 are all derivable from these, so keeping them would be storing the
+ * same fact twice and inviting the copies to disagree.
+ */
+export interface PortfolioNav {
+  ym: YearMonth
+  /** Net cash in or out that month. Negative is a withdrawal. */
+  cashFlow: number
+  /** Month-end valuation. */
+  marketValue: number
+  /** Unit price, fund style — starts at 1000 and moves only with performance. */
+  nav: number
+  /** KOSPI close, the benchmark the workbook already carries. */
+  benchmark?: number
+}
+
+/** 배당 · 성장 · 가치 · 모멘텀 · 현금 — how the user actually classifies holdings. */
+export type HoldingStyle = string
+
+/**
+ * One position, from `입력정보`. A current snapshot, not a time series.
+ *
+ * `currency` is derived from the exchange, never from the region: tiger
+ * 미국나스닥100 is US-exposed but trades on KRX and settles in won. Mixing the
+ * two would misconvert every foreign-exposed domestic ETF.
+ */
+export interface Holding {
+  id: string
+  /** 계좌주. Aggregated by default; splitting by owner is an option. */
+  owner: string
+  /** 계좌 — 유안타주식, 미래ISA, … */
+  account: string
+  name: string
+  /** As written in the sheet; spellings differ by quote source. */
+  ticker: string
+  quantity: number
+  /** Average purchase price, in `currency`. */
+  avgPrice: number
+  /** Per share, in `currency`. */
+  dividendPerShare?: number
+  /** 구분 — the axis this user manages by. */
+  style: HoldingStyle
+  /** 지역 — exposure, not settlement. */
+  region: string
+  /** 거래소 — KRX · kosdaq · USD · JPX. */
+  exchange: string
+  currency: CurrencyCode
+}
+
 export interface AssetData {
   version: 1
   settings: Settings
@@ -133,6 +186,10 @@ export interface AssetData {
   goals: Goal[]
   /** Corrections reapplied on every import. See ImportAdjustment. */
   importAdjustments: ImportAdjustment[]
+  /** Monthly portfolio performance, from the securities workbook. */
+  portfolioNavs: PortfolioNav[]
+  /** Current positions, from the securities workbook. */
+  holdings: Holding[]
 }
 
 export function emptyData(): AssetData {
@@ -146,6 +203,8 @@ export function emptyData(): AssetData {
     notes: [],
     goals: [],
     importAdjustments: [],
+    portfolioNavs: [],
+    holdings: [],
   }
 }
 
@@ -168,5 +227,7 @@ export function normaliseData(raw: unknown): AssetData {
     notes: Array.isArray(input.notes) ? input.notes : [],
     goals: Array.isArray(input.goals) ? input.goals : [],
     importAdjustments: Array.isArray(input.importAdjustments) ? input.importAdjustments : [],
+    portfolioNavs: Array.isArray(input.portfolioNavs) ? input.portfolioNavs : [],
+    holdings: Array.isArray(input.holdings) ? input.holdings : [],
   }
 }

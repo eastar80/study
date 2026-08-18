@@ -3,7 +3,7 @@ import type { Route } from './hashRoute'
 const NAV: { route: Route; label: string; icon: string; ready: boolean }[] = [
   { route: 'dashboard', label: '대시보드', icon: '▦', ready: true },
   { route: 'ledger', label: '자산 관리', icon: '▤', ready: true },
-  { route: 'portfolio', label: '포트폴리오', icon: '◪', ready: false },
+  { route: 'portfolio', label: '포트폴리오', icon: '◪', ready: true },
   { route: 'timeline', label: '타임라인', icon: '▥', ready: false },
   { route: 'import', label: '가져오기', icon: '⤓', ready: true },
   { route: 'inspect', label: '시트 분석', icon: '◎', ready: true },
